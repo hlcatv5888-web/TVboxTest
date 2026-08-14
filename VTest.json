@@ -1,5 +1,5 @@
 	{
-	"spider": "https://github.com/hlcatv5888-web/TVboxTest/raw/refs/heads/main/jar/fm.jar",
+	"spider": "./jar/fm.jar",
 	"logo": "https://i.makeagif.com/media/8-29-2024/hV0Nqy.gif",
 	"wallpaper": "https://picsum.photos/1080/",
 	"notice": "🥇𝕳Ｈ𝕳自𝕳用𝕳請𝕳勿𝕳分𝕳享𝕳Ｈ𝕳🥇",
@@ -17,7 +17,7 @@
 		"name": "📽️𝕳51短劇.py𝕳",
 		"type": 3,
 		"searchable": 1,
-		"api": "https://github.com/hlcatv5888-web/TVboxTest/raw/refs/heads/main/py/51短剧.py"
+		"api": "./py/51短剧.py"
 	},
 	{
 		"key": "csp_Bili短剧",
@@ -27,7 +27,7 @@
 		"searchable": 1,
 		"quickSearch": 1,
 		"filterable": 1,
-		"jar": "https://github.com/hlcatv5888-web/TVboxTest/raw/refs/heads/main/jar/xyqxbpq.jar",
+		"jar": "./jar/xyqxbpq.jar",
 		"ext": "https://raw.liucn.cc/box/libs/xyq/Bili短剧.json"
 	}
 	],
