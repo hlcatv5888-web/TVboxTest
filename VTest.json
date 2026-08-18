@@ -14,39 +14,12 @@
 	},
 	{
 		"key": "feikuai tv.py",
-		"name": "📽️𝕳飛快TV.py𝕳",
+		"name": "📽️𝕳.py𝕳",
 		"type": 3,
 		"searchable": 1,
-		"api": "./py/feikuai tv影視追劇.py"
+		"api": ""
 	},
-	{
-		"key": "咕嚕tv.py",
-		"name": "📽️𝕳咕嚕TV.py𝕳",
-		"type": 3,
-		"searchable": 1,
-		"api": "./py/咕噜4K[追劇].py"
-	},
-	{
-		"key": "wddjfix.py",
-		"name": "📽️𝕳黃豆短劇(修).py𝕳",
-		"type": 3,
-		"searchable": 1,
-		"api": "./py/黃豆短劇(修).py"
-	},
-	{
-		"key": "ydsdg.py",
-		"name": "📽️𝕳閱讀-速讀谷.py𝕳",
-		"type": 3,
-		"searchable": 1,
-		"api": "./py/阅读_速读谷.py"
-	},
-	{
-		"key": "ydcs18.py",
-		"name": "📽️𝕳夜讀小說(澀).py𝕳",
-		"type": 3,
-		"searchable": 1,
-		"api": "./py/夜读小说(涩).py"
-	},
+	
 	{
 		"key": "csp_Bili短剧",
 		"name": "B站短剧",
