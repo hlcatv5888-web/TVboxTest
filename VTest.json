@@ -30,8 +30,8 @@
       "searchable": 1,
       "quickSearch": 1,
       "filterable": 1,
-      "ext": "https://cz01.vip",
-      "category": "综合"
+      "ext": "https://cz01.vip"
+      
     },
 	{
       "key": "爱看机器人",
@@ -42,8 +42,8 @@
       "searchable": 1,
       "quickSearch": 1,
       "filterable": 1,
-      "ext": "",
-      "category": "综合"
+      "ext": ""
+      
     },
 	{
       "key": "片库",
