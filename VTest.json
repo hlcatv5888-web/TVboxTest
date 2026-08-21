@@ -8,7 +8,7 @@
 		"key": "Douban",
 		"name": "豆瓣精選",
 		"type": 3,
-		"jar": "https://qiniu.gongxueyun.com/upload/2175753/2026-08-15/report/529190385_3_1786835441319.jar",
+		"jar": "./jar/db0821.jar",
 		"api": "csp_PianDan",
 		"searchable": 1,
 		"indexs": 1,
