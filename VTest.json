@@ -12,7 +12,16 @@
 		"searchable": 1,
 		"quickSearch": 1
 	},
-	
+	{
+		"key": "片库",
+		"name": "🥇𝕳片库.js𝕳",
+		"type": 3,
+		"searchable": 1,
+		"quickSearch": 1,
+		"api": "https://files.catbox.moe/2d8wnx.js",
+		"changeable": 0,
+		"ext": ""
+    },	
 	{
 		"key": "csp_Bili短剧",
 		"name": "B站短剧",
