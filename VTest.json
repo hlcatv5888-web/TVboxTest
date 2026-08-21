@@ -12,65 +12,7 @@
 		"searchable": 1,
 		"quickSearch": 1
 	},
-	{
-		"key": "独播影视",
-		"name": "🦋 独播 • 影视",
-		"type": 3,
-		"jar": "./jar/db0821.jar",
-		"api": "csp_Duboku",
-		"ext": "",
-		"category": "综合"
-    },
-	{
-      "key": "厂长影视",
-      "name": "🦋 厂长 • 影视",
-      "type": 3,
-      "api": "csp_Czsapp",
-	  "jar": "./jar/db0821.jar",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1,
-      "ext": "https://cz01.vip"
-      
-    },
-	{
-      "key": "爱看机器人",
-      "name": "🦋 爱看 • 影视",
-      "type": 3,
-      "api": "csp_Ikanbot",
-	  "jar": "./jar/db0821.jar",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1,
-      "ext": ""
-      
-    },
-	{
-      "key": "片库",
-      "name": "🦋 片库.js(关梯)",
-      "type": 3,
-      "api": "https://lytvs.top/py/pianku.js",
-      "changeable": 0,
-      "ext": "",
-      "category": "综合"
-    },
-	{
-      "key": "骚火影视",
-      "name": "🦋 骚火 • 影视",
-      "type": 3,
-	  "jar": "./jar/db0821.jar",
-      "api": "csp_SaoHuo",
-      "ext": "https://shdy5.us",
-      "category": "综合"
-    },
-	{
-      "key": "xhvm",
-      "name": "🦋 骚火影视.py",
-      "type": 3,
-      "api": "https://lytvs.top/py/saohuoyingshi.py",
-      "ext": "",
-      "category": "综合"
-    },
+	
 	{
 		"key": "csp_Bili短剧",
 		"name": "B站短剧",
