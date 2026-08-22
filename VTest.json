@@ -1,27 +1,379 @@
 	{
-	"spider": "./jar/fm.jar",
-	"logo": "./831724.gif",
+	"spider": "https://github.com/hlcatv5888-web/TVboxTest/raw/refs/heads/main/jar/fm.jar",
+	"logo": "https://i.makeagif.com/media/8-29-2024/hV0Nqy.gif",
 	"wallpaper": "https://picsum.photos/1080/",
 	"notice": "🥇𝕳Ｈ𝕳自𝕳用𝕳請𝕳勿𝕳分𝕳享𝕳Ｈ𝕳🥇",
 	"sites": [
 	{
+		"key": "Jianpian",
+		"name": "🧲┆荐片┆磁力",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"api": "csp_Jianpian",
+		"searchable": 1,
+		"filterable": 1
+    },
+	{
+		"key": "Xb6v",
+		"name": "🔋┆6V┆磁力",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"api": "csp_Xb6v",
+		"searchable": 1,
+		"filterable": 1
+    },
+	{
+		"key": "ikbot",
+		"name": "🦋 爱看机器人.py",
+		"type": 3,
+		"searchable": 1,
+		"quickSearch": 1,
+		"api": "https://lytvs.top/py/aikanjiqiren.py",
+		"ext": ""
+    },
+	{
+		"key": "qw",
+		"name": "🦋 七味.py(关梯)",
+		"type": 3,
+		"searchable": 1,
+		"quickSearch": 1,
+		"api": "https://lytvs.top/py/qiwei.py",
+		"ext": ""
+    },
+	{
+		"key": "猫又影视",
+		"name": "🦋 猫又影视.py",
+		"type": 3,
+		"api": "https://lytvs.top/py/猫又影视.py",
+		"searchable": 1,
+		"quickSearch": 1,
+		"filterable": 1,
+		"ext": ""
+    },
+	{
+		"key": "EcoHub影视",
+		"name": "🦋 EcoHub影视.py",
+		"type": 3,
+		"api": "https://lytvs.top/py/EcoHub影视.py",
+		"searchable": 1,
+		"quickSearch": 1,
+		"filterable": 1,
+		"ext": ""
+    },
+	{
+		"key": "ayf",
+		"name": "🦋 爱壹帆影视.py",
+		"type": 3,
+		"searchable": 1,
+		"quickSearch": 1,
+		"api": "https://lytvs.top/py/aiyifan.py",
+		"ext": ""
+    },
+	{
+		"key": "Duboku",
+		"name": "🎯┆独播┆影视",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"api": "csp_Duboku",
+		"searchable": 1,
+		"quickSearch": 1,
+		"filterable": 1,
+		"changeable": 1
+    },
+	{
+		"key": "zhiqiu",
+		"name": "☘️┆听风┆知秋",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"api": "csp_zhiqiu",
+		"searchable": 1,
+		"ext": "http://www.小不点.com/api//2026/zhiqiu.php"
+    },
+	{
+		"key": "知年",
+		"name": "📅┆知年┆APP",
+		"api": "csp_AppUn",
+		"type": 3,
+		"searchable": 1,
+		"jar": "./jar/db0821.jar",
+		"ext": {"php": "https://max.moyu666666.top/appun.php","playname": "zn"}
+    },
+	{
+		"key": "大马猴",
+		"name": "🦋 大马猴.py(F)",
+		"type": 3,
+		"searchable": 1,
+		"quickSearch": 1,
+		"api": "https://lytvs.top/py/damahou.py",
+		"ext": ""
+    },
+	{
+		"key": "FoFo影院",
+		"name": "🦋 FoFo影院.py(关梯)",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/FoFoyingyuan.py",
+		"ext": ""
+    },
+	{
+		"key": "初见影视",
+		"name": "🦋 初见影视.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/chujianyingshi.py",
+		"ext": ""
+    },
+	{
+		"key": "好剧屋",
+		"name": "🦋 好剧屋.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/haojuwu.py",
+		"ext": ""
+    },
+	{
+		"key": "视觉影院",
+		"name": "🦋 视觉影院.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/shijueyingyuan.py",
+		"ext": ""
+    },
+	{
+		"key": "豆花影视",
+		"name": "🦋 豆花影视.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/douhuayingshi.py",
+		"ext": ""
+    },
+	{
+		"key": "开心影院",
+		"name": "🦋 开心影院.js",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/kaixinyingyuan.js",
+		"ext": ""
+    },
+	{
+		"key": "808yr",
+		"name": "🦋 808影院.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/808yingyuan.py",
+		"ext": ""
+    },
+	{
+		"key": "泡泡影院",
+		"name": "🦋 泡泡影院.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/paopaoyingyuan.py",
+		"ext": ""
+    },
+	{
+		"key": "楓林網",
+		"name": "🦋 楓林網.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/fenglinwang.py",
+		"ext": ""
+    },
+	{
+		"key": "八戒影视",
+		"name": "🦋 八戒影视.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/bajieyingshi.py",
+		"ext": ""
+    },
+	{
+		"key": "kkvm",
+		"name": "🦋 可可影视.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/kekeyingshi.py",
+		"ext": ""
+    },
+	{
+		"key": "爱影",
+		"name": "🦋 爱影 • APP",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"api": "csp_AppQi",
+		"searchable": 1,
+		"changeable": 1,
+		"ext": {"site": "https://aysappto.oss-cn-chengdu.aliyuncs.com/q26.txt","dataKey": "0UKM8jkasM8tdzgW","dataIv": "0UKM8jkasM8tdzgW",
+		"init": "initV122","ua": "okhttp/3.10.0"}
+    },
+    {
+		"key": "王子",
+		"name": "🦋 王子 • APP",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"api": "csp_AppGet",
+		"searchable": 1,
+		"changeable": 1,
+		"ext": {"url": "https://app.95112475.xyz","dataKey": "5a9w6x58dsq6z3a6","dataIv": "5a9w6x58dsq6z3a6"}
+    },
+	{
+		"key": "茉莉",
+		"name": "🦋 茉莉 • APP",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"api": "csp_AppGet",
+		"searchable": 1,
+		"changeable": 1,
+		"ext": {"site": "https://allinadmin.oss-cn-hangzhou.aliyuncs.com/bk/9.txt","dataKey": "88689667dce61725","dataIv": "88689667dce61725"}
+    },
+	{
+		"key": "山楂影视",
+		"name": "🦋 山楂 • 影视",
+		"type": 3,
+		"searchable": 1,
+		"jar": "./jar/db0821.jar",
+		"api": "csp_PianKu8",
+		"ext": ""
+    },
+	{
+		"key": "追影",
+		"name": "🦋 追影.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/zhuiying.py",
+		"ext": ""
+    },
+	{
+		"key": "hxq",
+		"name": "🦋 韩小圈.py(关梯)",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/hanxiaoquan.py",
+		"ext": ""
+    },
+	{
+		"key": "美剧天堂",
+		"name": "🦋 美剧天堂.py(关梯)",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/meijutiantang.py",
+		"ext": ""
+    },
+	{
+		"key": "4K影视",
+		"name": "🦋 4K影视.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/4Kyingshi.py",
+		"ext": ""
+    },
+	{
+		"key": "HonHon",
+		"name": "🍅┆红红┆短剧",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"api": "csp_HonHon",
+		"searchable": 1,
+		"quickSearch": 1,
+		"genre": "shortdrama",
+		"filterable": 1,
+		"ext": {"host": "https://short.fishcloud.top","quality": "1080p","danmu": false}
+    },
+	{
+		"key": "短剧巴士",
+		"name": "🦋 短剧巴士.py(关梯)",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/duanjubashi.py",
+		"ext": ""
+    },
+	{
+		"key": "悟圣短剧",
+		"name": "🦋 悟圣短剧.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/wushengduanju.py",
+		"ext": ""
+    },
+	{
+		"key": "喜福网",
+		"name": "🦋 喜福短剧.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/xifuduanju.py",
+		"ext": ""
+    },
+	{
+		"key": "方舟动漫",
+		"name": "🦋 方舟 • 动漫",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"searchable": 1,
+		"api": "csp_AppGet",
+		"ext": {"url": "https://www.cyfz.top","dataKey": "e72cdfd629e8895d","dataIv": "e72cdfd629e8895d"}
+    },
+	{
+		"key": "曼波动漫",
+		"name": "🦋 曼波 • 动漫",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"searchable": 1,
+		"api": "csp_AppGet",
+		"ext": {"url": "https://app.omofun1.top","dataKey": "66dc309cbeeca454","dataIv": "66dc309cbeeca454"}
+    },
+	{
+		"key": "咕咕动漫",
+		"name": "🦋 咕咕 • 动漫",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"searchable": 1,
+		"api": "csp_AppGet",
+		"ext": {"url": "https://www.gugu3.com","dataKey": "nKfZ8KX6JTNWRzTD","dataIv": "nKfZ8KX6JTNWRzTD"}
+    },
+	{
+		"key": "去看吧",
+		"name": "🦋 去看吧 • 动漫",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://cnb.cool/fish2035/xs/-/git/raw/main/js/drpy2.min.js",
+		"ext": "https://cnb.cool/fish2035/xs/-/git/raw/main/js/去看吧.js"
+    },
+	{
+		"key": "MiFun",
+		"name": "🦋 动漫MiFun动漫.py",
+		"type": 3,
+		"searchable": 1,
+		"api": "https://lytvs.top/py/MiFundongman.py",
+		"ext": ""
+    },
+	{
+		"key": "哔哩合集",
+		"name": "🦋 哔哩 • 合集",
+		"type": 3,
+		"jar": "./jar/db0821.jar",
+		"api": "csp_Bili",
+		"searchable": 1,
+		"quickSearch": 0,
+		"filterable": 0,
+		"changeable": 0,
+		"style": {"type": "rect","ratio": 1.433},
+		"ext": {"n": "哔哩合集","cookie": "http://127.0.0.1:9978/file/TVBox/bili_cookie.txt"}
+    },
+    {
 		"key": "1080zyk",
 		"name": "❤️1080ZYK",
 		"type": 1,
 		"api": "https://api.1080zyku.com/inc/api_mac10.php",
-		"searchable": 1,
-		"quickSearch": 1
+		"searchable": 1
 	},
-	
 	{
 		"key": "csp_Bili短剧",
 		"name": "B站短剧",
 		"api": "csp_Bili",
 		"type": 3,
 		"searchable": 1,
-		"quickSearch": 1,
 		"filterable": 1,
-		"jar": "./jar/xyqxbpq.jar",
+		
 		"ext": "https://raw.liucn.cc/box/libs/xyq/Bili短剧.json"
 	}
 	],
