@@ -1,44 +1,915 @@
 #coding=utf-8
 #!/usr/bin/python
-"""
-基于原 apiv19ytb.py，只做了 3 处最小改动来修复 1 分钟断流：
-1. _decrypt_nsig：移动端客户端 n 参数原样保留，不强行 JS 变换
-2. _call_player_api：删掉 IOS/ANDROID/MWEB，只用 4 个安全客户端
-3. _client_preset：钉死 ANDROID_VR 版本 1.65.10
-
-其余所有逻辑与原文件完全一致，不做任何额外过滤或改动。
-"""
-
 import re
 import os
 import sys
 import json
 import html
 import time
-import threading
-from urllib.parse import quote, unquote, parse_qs, urlencode, urlparse, urlunparse, urljoin
+from urllib.parse import quote, unquote, parse_qs, urlencode, urlparse, urlunparse
 
 import requests
 from base.spider import Spider
 
 sys.path.append('..')
 
-# ---------- 日志路径 ----------
-DEBUG_LOG = '/storage/emulated/0/Download/logs/ytb_debug.txt'
-def _ensure_log_dir():
-    try:
-        log_dir = os.path.dirname(DEBUG_LOG)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir, exist_ok=True)
-    except:
-        pass
-_ensure_log_dir()
+DEBUG_LOG = '/sdcard/Download/0712youtube_trace.log'
+
+YOUTUBE_CLASSES = [
+    {'type_id': '最新新聞', 'type_name': '新聞'},
+    {'type_id': '新聞直播', 'type_name': '新聞直播'},
+    {'type_id': '漫劇', 'type_name': 'AI漫劇'}, 
+    {'type_id': 'AI音樂翻唱', 'type_name': 'AI音樂翻唱'},     
+    {'type_id': '即時影像', 'type_name': '即時影像'},
+    {'type_id': '幼教', 'type_name': '幼兒教育'},    
+    {'type_id': '音樂', 'type_name': '音樂'},
+    {'type_id': '日漫', 'type_name': '日漫'},
+    {'type_id': '短劇', 'type_name': '短劇'},
+    {'type_id': '劇集', 'type_name': '劇集'},
+    {'type_id': '電影', 'type_name': '電影'},
+    {'type_id': '綜藝', 'type_name': '綜藝'},
+    {'type_id': '紀錄片', 'type_name': '紀錄片'},
+    {'type_id': '科技', 'type_name': '科技'},
+    {'type_id': '解說', 'type_name': '解說'},
+    {'type_id': '台劇', 'type_name': '台劇'},
+    {'type_id': '陸劇', 'type_name': '陸劇'},
+    {'type_id': '韓劇', 'type_name': '韓劇'},
+    {'type_id': '日劇', 'type_name': '日劇'},
+    {'type_id': '美劇', 'type_name': '美劇'},
+    {'type_id': '網紅', 'type_name': '網紅'},
+    {'type_id': '靈異', 'type_name': '靈異'},
+    {'type_id': '探險', 'type_name': '探險'},
+    {'type_id': '旅遊', 'type_name': '旅遊'},
+    {'type_id': '美食', 'type_name': '美食'},
+    {'type_id': '寵物', 'type_name': '寵物'},
+    {'type_id': '運動', 'type_name': '運動'},
+    {'type_id': '遊戲', 'type_name': '遊戲'},
+    {'type_id': 'Vlog', 'type_name': 'Vlog'},
+]
+
+CATEGORY_QUERY = {
+    '日漫': '日漫',
+    '幼教': '幼兒教育 兒童學習 早教 啟蒙 親子',
+    '漫劇': '漫劇',
+    '短劇': '短劇',
+    '綜藝': '綜藝',
+    '劇集': '電視劇 連續劇 劇集 drama',
+    '電影': '電影 movie',
+    '紀錄片': '紀錄片 documentary',
+    '科技': '科技',
+    '解說': '電影解說 故事解說',
+    '台劇': '台灣電視劇',
+    '陸劇': '大陸電視劇',
+    '韓劇': '韓國電視劇 Kdrama',
+    '日劇': '日本電視劇 Jdrama',
+    '美劇': '美國電視劇 drama',
+    '音樂': '音樂',
+    '新聞': '新聞 時事',
+    '新聞直播': '新聞直播 直播',
+    '即時影像': '即時影像 LIVE Cam',  # 新增
+    '網紅': '網紅 YouTuber 創作者',
+    '靈異': '靈異 鬼故事 恐怖',
+    '探險': '探險 冒險 野外 生存',
+    '旅遊': '旅遊 旅行 景點',
+    '美食': '美食 料理 吃播',
+    '寵物': '寵物 貓 狗 動物',
+    '運動': '運動 體育 健身',
+    '遊戲': '遊戲 實況 電玩',
+    'Vlog': 'Vlog 生活 日常',
+}
+
+CATEGORY_ALIASES = {
+    '連續劇': '劇集',
+    'movie': '電影',
+    'game': '遊戲',
+    'documentary': '紀錄片',
+}
+
+def _filter_group(key, name, pairs):
+    return {
+        'key': key,
+        'name': name,
+        'value': [{'n': '全部', 'v': ''}] + [{'n': n, 'v': v} for n, v in pairs]
+    }
+
+def _with_year(*groups):
+    years = [{'n': '全部', 'v': ''}] + [{'n': str(year), 'v': str(year)} for year in range(2026, 1957, -1)]
+    return [{'key': 'year', 'name': '年份', 'value': years}] + list(groups)
+
+CATEGORY_FILTERS = {
+      'AI音樂翻唱': (
+        _filter_group('type', '主題', [
+            ('西游封神榜', '音樂封神榜'),
+            ('三界好聲音', '三界好聲音'),
+            ('天庭好聲音', '天庭好聲音'),
+            ('三界蒙面猜猜猜', '三界蒙面猜猜猜'),   
+            ('華夏夢之聲', '华夏梦之声'),     
+            ('藍夜AI歌曲','NightBlue 夜藍 Original Music'),
+        ])),
+      '漫劇': (
+        _filter_group('type', '類型', [
+            ('奇幻', 'AI 奇幻 漫劇'),
+            ('科幻', 'AI 科幻 漫劇'),
+            ('戀愛', 'AI 戀愛 漫劇'),
+            ('穿越', 'AI 穿越 漫劇'),
+            ('重生', 'AI 重生 漫劇'),
+            ('復仇', 'AI 復仇 漫劇'),
+            ('都市', 'AI 都市 漫劇'),
+            ('古裝', 'AI 古裝 漫劇'),
+            ('仙俠', 'AI 仙俠 漫劇'),
+            ('懸疑', 'AI 懸疑 漫劇'),
+            ('搞笑', 'AI 搞笑 漫劇'),
+            ('熱血', 'AI 熱血 漫劇'),
+            ('溫馨', 'AI 溫馨 漫劇'),
+        ]),
+        _filter_group('duration', '時長', [      # 新增
+            ('全部', ''),
+            ('短 (<10分鐘)', 'short'),
+            ('中 (10-30分鐘)', 'medium'),
+            ('長 (>60分鐘)', 'long'),
+        ]),        
+        _filter_group('platform', '頻道', [
+            ('关关解说', '关关解说'),
+            ('破晓动漫社', '破晓动漫社'),
+            ('漫趣耕耘社', '漫趣耕耘社'),
+            ('少年漫剧社', '少年漫剧社'),
+            ('Mango漫剧宇宙', 'Mango漫剧宇宙'),
+            ('微尘漫剧', '微尘漫剧BestAnimation'),
+            ('神漫社', '神漫社'),
+            ('星河剧场', '星河剧场'),
+        ]),
+    ),
+    '即時影像': [  # 增強精準區域與真直播過濾
+        _filter_group('region', '地區選擇', [
+            ('台灣全區', '即時影像 台灣 LIVE Cam 監視器'),
+            ('台北/新北', '即時影像 台北 新北 陽明山 象山 貓空 Livecam'),
+            ('宜蘭/花東', '即時影像 宜蘭 花蓮 台東 龜山島 東海岸 Livecam'),
+            ('阿里山/日月潭', '即時影像 阿里山 日月潭 奮起湖 二延平 Livecam'),
+            ('高雄/墾丁', '即時影像 高雄 墾丁 壽山 旗津 愛河 Livecam'),
+            ('台中/清境', '即時影像 台中 合歡山 武嶺 清境 Livecam'),
+            ('桃園/新竹/苗栗', '即時影像 桃園 新竹 苗栗 石門水庫 Livecam'),
+            ('彰化/雲林/嘉義', '即時影像 彰化 雲林 嘉義 Livecam'),
+            ('澎金馬離島', '即時影像 澎湖 金門 馬祖 離島 Livecam'),
+            ('日本全區', 'Japan Live cam ライブカメラ 日本'),
+            ('富士山', 'Mount Fuji Live cam 富士山 ライブカメラ'),
+            ('東京地標', 'Tokyo Live cam 東京 渋谷 新宿 ライブカメラ'),
+            ('京都/大阪', 'Kyoto Osaka Live cam 京都 大阪 ライブカメラ'),
+            ('北海道/雪景', 'Hokkaido Live cam 北海道 ライブカメラ'),
+            ('沖繩海景', 'Okinawa Live cam 沖縄 ライブカメラ'),
+            ('韓國全區', 'Korea Live cam 韓國 Livecam'),
+            ('首爾/漢江', 'Seoul Live cam 首爾 漢江 Livecam'),
+            ('釜山/濟州島', 'Busan Jeju Live cam 釜山 濟州島 Livecam'),
+            ('美國地標', 'USA Live cam 紐約 Times Square 洛杉磯 Livecam'),
+            ('歐洲景觀', 'Europe Live cam 倫敦 巴黎 阿爾卑斯山 Livecam'),
+            ('泰國/東南亞', 'Thailand Live cam 曼谷 芭達雅 Livecam'),
+            ('全球精選地標', 'EarthCam World Live Cam 全球地標 監視器'),
+        ]),
+        _filter_group('type', '主題類型', [
+            ('風景觀光', '即時影像 風景 景點 觀光 Live Cam'),
+            ('高山氣象雲海', '即時影像 武嶺 阿里山 氣象 雲海 雪景 Live'),
+            ('海灘海洋港口', '即時影像 海灘 墾丁 旗津 港口 海邊 Live'),
+            ('交通車流機場', '即時影像 國道 交通 車流 機場 飛機 起降 Live'),
+            ('動物生態水族', '即時影像 動物 生態 貓咪 鳥巢 水族館 Live'),
+            ('城市夜景街景', '即時影像 城市 夜景 街景 360 Live Cam'),
+        ]),
+        _filter_group('quality', '畫質規格', [
+            ('4K超高清', '4K 即時影像 2160p Live Stream'),
+            ('8K全景VR', '8K 360 VR 即時影像 Live'),
+        ]),
+        _filter_group('channel', '熱門官方頻道', [
+            ('阿里山國家風景區', '阿里山國家風景區管理處 Live'),
+            ('台北觀光即時影像', '台北觀光即時影像 象山 Live'),
+            ('高雄市政府觀光局', '高雄市政府觀光局 Live'),
+            ('Japan Live Camera', 'Japan Live Camera'),
+            ('EarthCam', 'EarthCam World Live Cam'),
+            ('SkylineWebcams', 'SkylineWebcams Live'),
+            ('東海岸國家風景區', '東海岸國家風景區管理處 Live'),
+        ])
+    ],    
+'日漫': _with_year(
+    _filter_group('title', '熱門作品', [
+        ('海賊王', 'onepiece ワンピース'),
+        ('火影忍者', 'naruto ナルト'),
+        ('咒術迴戰', 'jujutsu kaisen'),
+        ('鬼滅之刃', 'demon slayer 鬼滅の刃'),
+        ('進擊的巨人', 'attack on titan'),
+        ('我推的孩子', 'oshi no ko'),
+        ('葬送的芙莉蓮', 'frieren'),
+        ('間諜家家酒', 'spy x family'),
+    ]),
+    _filter_group('studio', '製作公司', [
+        ('東映', '東映アニメーション'),
+        ('MAPPA', 'MAPPA'),
+        ('ufotable', 'ufotable'),
+        ('WIT Studio', 'WIT Studio'),
+        ('CloverWorks', 'CloverWorks'),
+        ('A-1 Pictures', 'A-1 Pictures'),
+        ('京都動畫', '京都アニメーション'),
+    ]),
+),
+    '幼教': (
+        _filter_group('subject', '學習主題', [
+            ('語言學習', '幼兒 語言學習 認字 發音'),
+            ('英語', '兒童英語 英語啟蒙 英文兒歌'),
+            ('注音/拼音', '注音 學習 拼音 學習'),
+            ('數學', '幼兒 數學 數數 加減法'),
+            ('自然科學', '幼兒 自然 科學 實驗'),
+            ('社會', '幼兒 社會 人際 情緒'),
+            ('藝術', '幼兒 美術 勞作 音樂'),
+            ('體能', '幼兒 運動 體能 遊戲'),
+            ('安全教育', '幼兒 安全 教育'),
+        ]),
+        _filter_group('type', '內容類型', [
+            ('兒歌', '兒歌 童謠 手指謠'),
+            ('故事', '兒童故事 繪本 睡前故事'),
+            ('動畫', '兒童動畫 卡通'),
+            ('教學', '兒童教學 學習影片'),
+            ('遊戲', '兒童遊戲 親子遊戲'),
+            ('勞作', '兒童勞作 手作 DIY'),
+            ('實驗', '兒童科學實驗'),
+        ]),
+        _filter_group('age', '年齡段', [
+            ('0-3歲', '0-3歲 幼兒 嬰兒'),
+            ('3-6歲', '3-6歲 學齡前 幼兒園'),
+            ('6-9歲', '6-9歲 國小 低年級'),
+            ('9-12歲', '9-12歲 國小 中年級'),
+        ]),
+        _filter_group('channel', '熱門頻道', [
+            ('寶寶巴士', '寶寶巴士 BabyBus'),
+            ('碰碰狐', '碰碰狐 Pinkfong'),
+            ('哆啦A夢', '哆啦A夢 Doraemon ドラえもん'),            
+            ('Super Simple', 'Super Simple Songs'),
+            ('CoComelon', 'CoComelon'),
+            ('Blippi', 'Blippi 兒童'),
+            ('Peppa Pig', 'Peppa Pig 小豬佩奇'),
+            ('巧虎', '巧虎 兒童'),
+            ('D Billions', 'D Billions'),
+            ('Little Angel', 'Little Angel 兒歌'),
+            ('Dave and Ava', 'Dave and Ava'),
+            ('汪汪隊', '汪汪隊 Paw Patrol'),
+            ('超級飛俠', '超級飛俠 Super Wings'),
+            ('愛探險的朵拉', 'Dora 朵拉 探險'),
+            ('海綿寶寶', '海綿寶寶 SpongeBob'),
+            ('角落小夥伴', '角落小夥伴 Sumikko Gurashi'),
+        ])
+    ),    
+    '短劇': (
+        _filter_group('duration', '時長', [
+            ('全部', ''),
+            ('短 (<10分鐘)', 'short'),
+            ('中 (10-30分鐘)', 'medium'),
+            ('長 (>60分鐘)', 'long'),
+        ]),
+        _filter_group('platform', '平台', [
+            ('抖音', '抖音 短劇'),
+            ('快手', '快手 短劇'),
+            ('騰訊', '騰訊 短劇'),
+            ('愛奇藝', '愛奇藝 短劇'),
+            ('優酷', '優酷 短劇'),
+            ('芒果', '芒果TV 短劇'),
+            ('搜狐', '搜狐 短劇'),
+        ]),
+        _filter_group('type', '類型', [
+            ('都市', '都市 短劇'),
+            ('愛情', '愛情 短劇'),
+            ('復仇', '復仇 短劇'),
+            ('穿越', '穿越 短劇'),
+            ('喜劇', '喜劇 短劇'),
+            ('奇幻', '奇幻 短劇'),
+            ('懸疑', '懸疑 短劇'),
+            ('甜寵', '甜寵 短劇'),
+            ('霸總', '霸道總裁 短劇'),
+            ('古裝', '古裝 短劇'),
+        ]),
+        _filter_group('channel', '頻道主', [
+            ('九醬愛追劇', '九醬愛追劇'),
+            ('百萬好劇場', '百萬好劇場'),
+            ('咖啡追劇', '咖啡追劇'),
+            ('斗羅短劇', '斗羅短劇'),
+            ('嘟嘟劇場', '嘟嘟劇場'),
+            ('牛牛短劇', '牛牛短劇'),
+        ])
+    ),
+    
+    '綜藝': _with_year(
+        _filter_group('region', '地區', [
+            ('台灣', '台灣 綜藝 節目'),
+            ('大陸', '大陸 綜藝 節目'),
+            ('韓國', '韓國 綜藝 節目'),
+            ('日本', '日本 綜藝 節目'),
+            ('美國', '美國 綜藝 節目'),
+            ('香港', '香港 綜藝 節目'),
+            ('英國', '英國 綜藝 節目'),
+            ('泰國', '泰國 綜藝 節目'),
+        ]),
+        _filter_group('platform', '平台/頻道', [
+            ('台綜', 'TVBS 三立 中天 東森 八大 台視 中視 華視 民視 綜藝'),
+            ('陸綜', '湖南衛視 浙江衛視 東方衛視 江蘇衛視 北京衛視 綜藝'),
+            ('韓綜', 'KBS MBC SBS tvN JTBC 綜藝'),
+            ('日綜', '日本電視台 TBS 綜藝'),
+            ('美綜', 'ABC CBS NBC 綜藝'),
+            ('串流', 'Netflix Disney+ Amazon Prime HBO Max 綜藝'),
+            ('TVB', 'TVB 綜藝'),
+            ('ViuTV', 'ViuTV 綜藝'),
+        ]),
+        _filter_group('type', '類型', [
+            ('真人秀', '真人秀 綜藝'),
+            ('競賽', '競賽 綜藝'),
+            ('選秀', '選秀 綜藝'),
+            ('歌唱', '歌唱 綜藝'),
+            ('音樂', '音樂 綜藝'),
+            ('舞蹈', '舞蹈 綜藝'),
+            ('脫口秀', '脫口秀 綜藝'),
+            ('訪談', '訪談 綜藝'),
+            ('遊戲', '遊戲 綜藝'),
+            ('益智', '益智 綜藝'),
+            ('美食', '美食 綜藝'),
+            ('旅遊', '旅遊 綜藝'),
+            ('戀愛', '戀愛 綜藝'),
+            ('親子', '親子 綜藝'),
+            ('喜劇', '喜劇 綜藝'),
+            ('生活', '生活 綜藝'),
+        ]),
+        _filter_group('channel', '熱門節目', [
+            ('Running Man', 'Running Man'),
+            ('綜藝大熱門', '綜藝大熱門'),
+            ('綜藝玩很大', '綜藝玩很大'),
+            ('飢餓遊戲', '飢餓遊戲'),
+            ('小明星大跟班', '小明星大跟班'),
+            ('全民星攻略', '全民星攻略'),
+            ('天才衝衝衝', '天才衝衝衝'),
+            ('認識的哥哥', '認識的哥哥'),
+            ('兩天一夜', '兩天一夜'),
+            ('新西遊記', '新西遊記'),
+            ('我獨自生活', '我獨自生活'),
+            ('無限挑戰', '無限挑戰'),
+            ('奔跑吧', '奔跑吧'),
+            ('極限挑戰', '極限挑戰'),
+            ('王牌對王牌', '王牌對王牌'),
+            ('快樂大本營', '快樂大本營'),
+            ('天天向上', '天天向上'),
+            ('歌手', '歌手'),
+            ('中國好聲音', '中國好聲音'),
+            ('乘風破浪', '乘風破浪'),
+            ('披荊斬棘', '披荊斬棘'),
+            ('嚮往的生活', '嚮往的生活'),
+            ('明星大偵探', '明星大偵探'),
+            ('密室大逃脫', '密室大逃脫'),
+            ('這！就是街舞', '這！就是街舞'),
+            ('創造營', '創造營'),
+        ])
+    ),
+    
+    '劇集': _with_year(
+        _filter_group('region', '地區', [
+            ('大陸', '大陸 電視劇 連續劇'),
+            ('台灣', '台灣 電視劇 連續劇'),
+            ('香港', '香港 電視劇 連續劇'),
+            ('韓國', '韓國 電視劇 連續劇 Kdrama'),
+            ('日本', '日本 電視劇 連續劇 Jdrama'),
+            ('美國', '美國 電視劇 連續劇 drama'),
+            ('英國', '英國 電視劇 連續劇 drama'),
+            ('泰國', '泰國 電視劇 連續劇'),
+        ]),
+        _filter_group('platform', '平台', [
+            ('騰訊', '騰訊 電視劇'),
+            ('愛奇藝', '愛奇藝 電視劇'),
+            ('優酷', '優酷 電視劇'),
+            ('芒果', '芒果TV 電視劇'),
+            ('搜狐', '搜狐 電視劇'),
+            ('TVB', 'TVB 劇集'),
+            ('Netflix', 'Netflix 劇集'),
+            ('Disney+', 'Disney+ 劇集'),
+            ('Apple TV+', 'Apple TV+ 劇集'),
+            ('Amazon Prime', 'Amazon Prime 劇集'),
+            ('HBO', 'HBO 劇集'),
+            ('Hulu', 'Hulu 劇集'),
+        ]),
+        _filter_group('type', '類型', [
+            ('愛情', '愛情 劇集'),
+            ('喜劇', '喜劇 劇集'),
+            ('懸疑', '懸疑 劇集'),
+            ('推理', '推理 劇集'),
+            ('犯罪', '犯罪 劇集'),
+            ('科幻', '科幻 劇集'),
+            ('奇幻', '奇幻 劇集'),
+            ('古裝', '古裝 劇集'),
+            ('歷史', '歷史 劇集'),
+            ('家庭', '家庭 劇集'),
+            ('職場', '職場 劇集'),
+            ('校園', '校園 劇集'),
+            ('醫療', '醫療 劇集'),
+            ('律政', '律政 劇集'),
+            ('復仇', '復仇 劇集'),
+            ('穿越', '穿越 劇集'),
+        ])
+    ),
+    
+    '電影': _with_year(
+        _filter_group('region', '地區', [
+            ('大陸', '大陸 電影'),
+            ('台灣', '台灣 電影'),
+            ('香港', '香港 電影'),
+            ('韓國', '韓國 電影'),
+            ('日本', '日本 電影'),
+            ('美國', '美國 movie'),
+            ('英國', '英國 movie'),
+            ('法國', '法國 電影'),
+            ('德國', '德國 電影'),
+            ('義大利', '義大利 電影'),
+            ('西班牙', '西班牙 電影'),
+            ('印度', '印度 電影'),
+            ('泰國', '泰國 電影'),
+        ]),
+        _filter_group('platform', '平台', [
+            ('YouTube Movies', 'YouTube Movies'),
+            ('Netflix', 'Netflix movie'),
+            ('Disney+', 'Disney+ movie'),
+            ('Apple TV+', 'Apple TV+ movie'),
+            ('Amazon Prime', 'Amazon Prime movie'),
+            ('HBO Max', 'HBO Max movie'),
+            ('Hulu', 'Hulu movie'),
+            ('騰訊', '騰訊 電影'),
+            ('愛奇藝', '愛奇藝 電影'),
+            ('優酷', '優酷 電影'),
+            ('芒果', '芒果TV 電影'),
+        ]),
+        _filter_group('type', '類型', [
+            ('動作', '動作 movie'),
+            ('冒險', '冒險 movie'),
+            ('科幻', '科幻 movie'),
+            ('奇幻', '奇幻 movie'),
+            ('愛情', '愛情 movie'),
+            ('喜劇', '喜劇 movie'),
+            ('懸疑', '懸疑 movie'),
+            ('驚悚', '驚悚 movie'),
+            ('恐怖', '恐怖 movie'),
+            ('犯罪', '犯罪 movie'),
+            ('劇情', '劇情 movie'),
+            ('歷史', '歷史 movie'),
+            ('戰爭', '戰爭 movie'),
+            ('動畫', '動畫 movie'),
+            ('紀錄片', '紀錄片 movie'),
+            ('家庭', '家庭 movie'),
+        ]),
+    ),
+    
+    '紀錄片': _with_year(
+        _filter_group('topic', '主題', [
+            ('自然', '自然 紀錄片 nature documentary'),
+            ('野生動物', '野生動物 紀錄片 wildlife documentary'),
+            ('海洋', '海洋 紀錄片 ocean documentary'),
+            ('宇宙', '宇宙 紀錄片 universe documentary'),
+            ('歷史', '歷史 紀錄片 history documentary'),
+            ('戰爭', '戰爭 紀錄片 war documentary'),
+            ('人文', '人文 紀錄片'),
+            ('社會', '社會 紀錄片'),
+            ('科技', '科技 紀錄片'),
+            ('犯罪', '犯罪 紀錄片'),
+            ('美食', '美食 紀錄片'),
+            ('旅遊', '旅遊 紀錄片'),
+            ('運動', '運動 紀錄片'),
+            ('音樂', '音樂 紀錄片'),
+        ]),
+        _filter_group('channel', '頻道/平台', [
+            ('BBC', 'BBC 紀錄片 documentary'),
+            ('國家地理', 'National Geographic documentary'),
+            ('Discovery', 'Discovery 紀錄片'),
+            ('Netflix', 'Netflix 紀錄片 documentary'),
+            ('HBO', 'HBO 紀錄片 documentary'),
+            ('PBS', 'PBS 紀錄片'),
+            ('NHK', 'NHK 紀錄片'),
+        ])
+    ),
+    
+    '科技': [
+        _filter_group('topic', '主題', [
+            ('AI', '人工智能 AI technology'),
+            ('數碼', '數碼 科技 technology'),
+            ('手機', '手機 評測 科技'),
+            ('電腦', '電腦 科技 technology'),
+            ('汽車', '汽車 科技 technology'),
+            ('太空', '航天 太空 科技'),
+            ('機器人', '機器人 科技'),
+            ('VR', 'VR AR 科技'),
+            ('電競', '電競 科技'),
+            ('音響', '音響 科技'),
+            ('相機', '相機 攝影 科技'),
+        ]),
+        _filter_group('channel', '頻道主', [
+            ('科技小飛', '科技小飛'),
+            ('林大廚', '林大廚 科技'),
+            ('鍾文澤', '鍾文澤'),
+            ('TESTV', 'TESTV'),
+            ('何同學', '何同學'),
+            ('MKBHD', 'MKBHD'),
+            ('Linus Tech Tips', 'Linus Tech Tips'),
+            ('Marques Brownlee', 'Marques Brownlee'),
+            ('iJustine', 'iJustine'),
+            ('Unbox Therapy', 'Unbox Therapy'),
+        ])
+    ],
+    
+    '解說': [
+        _filter_group('channel', '頻道主', [
+            ('宇哥侃故事', '宇哥侃故事'),
+            ('牛叔電影', '牛叔電影'),
+            ('阿斗歸來', '阿斗歸來'),
+            ('老李說電影', '老李說電影'),
+            ('小片片說大片', '小片片說大片'),
+            ('越哥說電影', '越哥說電影'),
+            ('止戈電影', '止戈電影'),
+            ('毒舌電影', '毒舌電影'),
+            ('青銅電影', '青銅電影'),
+            ('黑牛電影', '黑牛電影'),
+        ]),
+        _filter_group('type', '類型', [
+            ('懸疑', '懸疑 解說'),
+            ('科幻', '科幻 解說'),
+            ('恐怖', '恐怖 解說'),
+            ('喜劇', '喜劇 解說'),
+            ('動作', '動作 解說'),
+            ('愛情', '愛情 解說'),
+            ('動畫', '動畫 解說'),
+            ('紀錄片', '紀錄片 解說'),
+            ('韓劇', '韓劇 解說'),
+            ('日劇', '日劇 解說'),
+            ('美劇', '美劇 解說'),
+        ])
+    ],
+    
+    '台劇': _with_year(
+        _filter_group('platform', '平台', [
+            ('台視', '台視 台劇'),
+            ('中視', '中視 台劇'),
+            ('華視', '華視 台劇'),
+            ('民視', '民視 台劇'),
+            ('三立', '三立 台劇'),
+            ('TVBS', 'TVBS 台劇'),
+            ('東森', '東森 台劇'),
+            ('八大', '八大 台劇'),
+            ('Netflix', 'Netflix 台劇'),
+        ]),
+        _filter_group('type', '類型', [
+            ('愛情', '愛情 台劇'),
+            ('喜劇', '喜劇 台劇'),
+            ('懸疑', '懸疑 台劇'),
+            ('職場', '職場 台劇'),
+            ('校園', '校園 台劇'),
+            ('家庭', '家庭 台劇'),
+            ('復仇', '復仇 台劇'),
+            ('穿越', '穿越 台劇'),
+            ('科幻', '科幻 台劇'),
+            ('古裝', '古裝 台劇'),
+        ])
+    ),
+    
+    '陸劇': _with_year(
+        _filter_group('platform', '平台', [
+            ('騰訊', '騰訊 陸劇'),
+            ('愛奇藝', '愛奇藝 陸劇'),
+            ('優酷', '優酷 陸劇'),
+            ('芒果', '芒果TV 陸劇'),
+            ('搜狐', '搜狐 陸劇'),
+            ('Netflix', 'Netflix 陸劇'),
+        ]),
+        _filter_group('type', '類型', [
+            ('古裝', '古裝 陸劇'),
+            ('仙俠', '仙俠 陸劇'),
+            ('愛情', '愛情 陸劇'),
+            ('懸疑', '懸疑 陸劇'),
+            ('職場', '職場 陸劇'),
+            ('家庭', '家庭 陸劇'),
+            ('歷史', '歷史 陸劇'),
+            ('諜戰', '諜戰 陸劇'),
+            ('軍旅', '軍旅 陸劇'),
+            ('校園', '校園 陸劇'),
+            ('復仇', '復仇 陸劇'),
+            ('甜寵', '甜寵 陸劇'),
+        ])
+    ),
+    
+    '韓劇': _with_year(
+        _filter_group('platform', '平台', [
+            ('tvN', 'tvN 韓劇'),
+            ('JTBC', 'JTBC 韓劇'),
+            ('KBS', 'KBS 韓劇'),
+            ('MBC', 'MBC 韓劇'),
+            ('SBS', 'SBS 韓劇'),
+            ('Netflix', 'Netflix 韓劇'),
+            ('Disney+', 'Disney+ 韓劇'),
+        ]),
+        _filter_group('type', '類型', [
+            ('愛情', '愛情 韓劇'),
+            ('懸疑', '懸疑 韓劇'),
+            ('犯罪', '犯罪 韓劇'),
+            ('家庭', '家庭 韓劇'),
+            ('職場', '職場 韓劇'),
+            ('校園', '校園 韓劇'),
+            ('科幻', '科幻 韓劇'),
+            ('奇幻', '奇幻 韓劇'),
+            ('歷史', '歷史 韓劇'),
+            ('復仇', '復仇 韓劇'),
+            ('喜劇', '喜劇 韓劇'),
+        ])
+    ),
+    
+    '日劇': _with_year(
+        _filter_group('platform', '平台', [
+            ('NHK', 'NHK 日劇'),
+            ('TBS', 'TBS 日劇'),
+            ('富士', '富士 日劇'),
+            ('日本電視台', '日本電視台 日劇'),
+            ('朝日', '朝日 日劇'),
+            ('Netflix', 'Netflix 日劇'),
+            ('Disney+', 'Disney+ 日劇'),
+        ]),
+        _filter_group('type', '類型', [
+            ('愛情', '愛情 日劇'),
+            ('懸疑', '懸疑 日劇'),
+            ('職場', '職場 日劇'),
+            ('校園', '校園 日劇'),
+            ('家庭', '家庭 日劇'),
+            ('醫療', '醫療 日劇'),
+            ('律政', '律政 日劇'),
+            ('深夜劇', '深夜 日劇'),
+            ('漫改', '漫畫改編 日劇'),
+            ('喜劇', '喜劇 日劇'),
+        ])
+    ),
+    
+    '美劇': _with_year(
+        _filter_group('platform', '平台', [
+            ('Netflix', 'Netflix 美劇'),
+            ('HBO', 'HBO 美劇'),
+            ('Disney+', 'Disney+ 美劇'),
+            ('Apple TV+', 'Apple TV+ 美劇'),
+            ('Amazon Prime', 'Amazon Prime 美劇'),
+            ('Hulu', 'Hulu 美劇'),
+            ('ABC', 'ABC 美劇'),
+            ('CBS', 'CBS 美劇'),
+            ('NBC', 'NBC 美劇'),
+            ('FOX', 'FOX 美劇'),
+            ('CW', 'CW 美劇'),
+        ]),
+        _filter_group('type', '類型', [
+            ('科幻', '科幻 美劇'),
+            ('懸疑', '懸疑 美劇'),
+            ('犯罪', '犯罪 美劇'),
+            ('律政', '律政 美劇'),
+            ('醫療', '醫療 美劇'),
+            ('喜劇', '喜劇 美劇'),
+            ('愛情', '愛情 美劇'),
+            ('家庭', '家庭 美劇'),
+            ('歷史', '歷史 美劇'),
+            ('驚悚', '驚悚 美劇'),
+            ('奇幻', '奇幻 美劇'),
+            ('超級英雄', '超級英雄 美劇'),
+        ])
+    ),
+    
+    '音樂': [
+        _filter_group('topic', '主題', [
+            ('華語', '華語 音樂'),
+            ('台灣', '台灣 音樂'),
+            ('香港', '香港 音樂'),
+            ('韓國', '韓國 音樂 Kpop'),
+            ('日本', '日本 音樂 Jpop'),
+            ('歐美', '歐美 音樂'),
+            ('古典', '古典 音樂'),
+            ('爵士', '爵士 音樂'),
+            ('搖滾', '搖滾 音樂'),
+            ('電子', '電子 音樂'),
+            ('民謠', '民謠 音樂'),
+            ('饒舌', '饒舌 音樂'),
+            ('輕音樂', '輕音樂'),
+            ('放鬆', '放鬆 音樂 meditation'),
+            ('白噪音', '白噪音 white noise'),
+            ('睡眠', '睡眠 音樂'),
+        ]),
+        _filter_group('type', '類型', [
+            ('MV', 'MV 音樂錄影帶'),
+            ('現場', '現場 表演 live'),
+            ('翻唱', '翻唱 cover'),
+            ('伴奏', '伴奏 instrumental'),
+            ('鋼琴', '鋼琴 音樂'),
+            ('吉他', '吉他 音樂'),
+            ('古風', '古風 音樂'),
+        ])
+    ],
+    
+    '網紅': [
+        _filter_group('topic', '主題', [
+            ('生活', '生活 Vlog'),
+            ('開箱', '開箱 評測'),
+            ('美食', '美食 吃播'),
+            ('旅遊', '旅遊 Vlog'),
+            ('搞笑', '搞笑 影片'),
+            ('美妝', '美妝 教學'),
+            ('健身', '健身 教學'),
+            ('知識', '知識 科普'),
+            ('科技', '科技 評測'),
+            ('遊戲', '遊戲 實況'),
+            ('動漫', '動漫 二次元'),
+            ('寵物', '寵物 日常'),
+        ])
+    ],
+    
+    '靈異': [
+        _filter_group('topic', '主題', [
+            ('鬼故事', '鬼故事 靈異'),
+            ('都市傳說', '都市傳說 靈異'),
+            ('真實事件', '真實 靈異 事件'),
+            ('恐怖', '恐怖 靈異'),
+            ('懸疑', '懸疑 靈異'),
+        ]),
+        _filter_group('channel', '頻道主', [
+            ('老高與小茉', '老高與小茉'),
+            ('異色檔案', '異色檔案'),
+            ('皮哥', '皮哥 靈異'),
+            ('蝦皮', '蝦皮 靈異'),
+        ])
+    ],
+    
+    '探險': [
+        _filter_group('topic', '主題', [
+            ('野外生存', '野外 生存 探險'),
+            ('洞穴探險', '洞穴 探險'),
+            ('登山', '登山 探險'),
+            ('叢林', '叢林 探險'),
+            ('沙漠', '沙漠 探險'),
+            ('極地', '極地 探險'),
+            ('廢墟', '廢墟 探險'),
+            ('潛水', '潛水 探險'),
+        ]),
+        _filter_group('channel', '頻道主', [
+            ('Discovery', 'Discovery 探險'),
+            ('國家地理', '國家地理 探險'),
+            ('貝爺', '荒野求生 貝爾'),
+            ('德爺', '荒野求生 德爺'),
+        ])
+    ],
+    
+    '旅遊': [
+        _filter_group('region', '地區', [
+            ('台灣', '台灣 旅遊'),
+            ('日本', '日本 旅遊'),
+            ('韓國', '韓國 旅遊'),
+            ('泰國', '泰國 旅遊'),
+            ('越南', '越南 旅遊'),
+            ('歐洲', '歐洲 旅遊'),
+            ('美國', '美國 旅遊'),
+            ('澳洲', '澳洲 旅遊'),
+            ('紐西蘭', '紐西蘭 旅遊'),
+            ('中國', '中國 旅遊'),
+            ('香港', '香港 旅遊'),
+            ('澳門', '澳門 旅遊'),
+        ]),
+        _filter_group('type', '類型', [
+            ('自由行', '自由行 旅遊'),
+            ('美食', '美食 旅遊'),
+            ('景點', '景點 旅遊'),
+            ('住宿', '住宿 飯店 旅遊'),
+            ('交通', '交通 旅遊'),
+            ('購物', '購物 旅遊'),
+            ('秘境', '秘境 旅遊'),
+        ])
+    ],
+    
+    '美食': [
+        _filter_group('region', '地區', [
+            ('台灣', '台灣 美食'),
+            ('日本', '日本 美食'),
+            ('韓國', '韓國 美食'),
+            ('泰國', '泰國 美食'),
+            ('中國', '中國 美食'),
+            ('香港', '香港 美食'),
+            ('義大利', '義大利 美食'),
+            ('法國', '法國 美食'),
+            ('美國', '美國 美食'),
+        ]),
+        _filter_group('type', '類型', [
+            ('吃播', '吃播 Mukbang'),
+            ('料理教學', '料理 教學 食譜'),
+            ('餐廳推薦', '餐廳 推薦 美食'),
+            ('街頭小吃', '街頭 小吃 美食'),
+            ('烘焙', '烘焙 甜點'),
+            ('咖啡', '咖啡 教學'),
+        ])
+    ],
+    
+    '寵物': [
+        _filter_group('type', '類型', [
+            ('貓咪', '貓咪 寵物'),
+            ('狗狗', '狗狗 寵物'),
+            ('兔子', '兔子 寵物'),
+            ('倉鼠', '倉鼠 寵物'),
+            ('鳥類', '鳥類 寵物'),
+            ('水族', '水族 寵物'),
+            ('爬蟲', '爬蟲 寵物'),
+        ]),
+        _filter_group('channel', '頻道主', [
+            ('豆漿', '豆漿 貓'),
+            ('俊介', '俊介 狗'),
+            ('貓咪影片', '貓咪 影片'),
+            ('狗狗影片', '狗狗 影片'),
+        ])
+    ],
+    
+    '運動': [
+        _filter_group('type', '類型', [
+            ('籃球', '籃球 NBA'),
+            ('足球', '足球 英超 西甲'),
+            ('棒球', '棒球 MLB CPBL'),
+            ('網球', '網球 大滿貫'),
+            ('高爾夫', '高爾夫'),
+            ('賽車', '賽車 F1'),
+            ('自行車', '自行車 環法'),
+            ('馬拉松', '馬拉松 路跑'),
+            ('健身', '健身 重訓'),
+            ('瑜伽', '瑜伽 皮拉提斯'),
+            ('武術', '武術 綜合格鬥'),
+        ])
+    ],
+    
+    '遊戲': [
+        _filter_group('type', '類型', [
+            ('實況', '遊戲 實況 Live'),
+            ('攻略', '遊戲 攻略 教學'),
+            ('電競', '電競 比賽'),
+            ('手遊', '手遊 手機遊戲'),
+            ('PC', 'PC 遊戲'),
+            ('主機', 'PS5 Xbox Switch 遊戲'),
+            ('獨立遊戲', '獨立遊戲 indie'),
+        ]),
+        _filter_group('channel', '頻道主', [
+            ('老皮', '老皮 遊戲'),
+            ('魯蛋', '魯蛋 遊戲'),
+            ('阿神', '阿神 遊戲'),
+            ('PewDiePie', 'PewDiePie'),
+            ('Markiplier', 'Markiplier'),
+            ('Jacksepticeye', 'Jacksepticeye'),
+        ])
+    ],
+    
+    'Vlog': [
+        _filter_group('topic', '主題', [
+            ('日常', '日常 Vlog'),
+            ('開箱', '開箱 Vlog'),
+            ('旅遊', '旅遊 Vlog'),
+            ('美食', '美食 Vlog'),
+            ('美妝', '美妝 Vlog'),
+            ('穿搭', '穿搭 Vlog'),
+            ('學習', '學習 讀書 Vlog'),
+            ('工作', '工作 辦公室 Vlog'),
+            ('家庭', '家庭 Vlog'),
+            ('寵物', '寵物 Vlog'),
+        ])
+    ],
+    
+    '新聞': [
+        _filter_group('region', '地區', [
+            ('國際', '國際 新聞'),
+            ('台灣', '台灣 新聞'),
+            ('大陸', '大陸 新聞'),
+            ('香港', '香港 新聞'),
+            ('美國', '美國 新聞'),
+            ('歐洲', '歐洲 新聞'),
+            ('亞洲', '亞洲 新聞'),
+        ]),
+        _filter_group('topic', '主題', [
+            ('政治', '政治 新聞'),
+            ('經濟', '經濟 新聞'),
+            ('社會', '社會 新聞'),
+            ('科技', '科技 新聞'),
+            ('娛樂', '娛樂 新聞'),
+            ('體育', '體育 新聞'),
+        ])
+    ],
+    
+    '新聞直播': [
+        _filter_group('region', '地區', [
+            ('台灣', '台灣新聞直播'),
+            ('大陸', '中國新闻直播 China News Live'),
+            ('香港', '香港新闻直播 Hong Kong News Live'),
+            ('美國', '美國新聞直播'),
+            ('國際', '國際新聞直播'),
+        ]),
+        _filter_group('channel', '頻道', [
+            ('TVBS', 'TVBS 新聞 直播'),
+            ('中天', '中天 新聞 直播'),
+            ('三立', '三立 新聞 直播'),
+            ('東森', '東森 新聞 直播'),
+            ('CNN', 'CNN 直播'),
+            ('BBC', 'BBC 直播'),
+            ('央視', '央視 新聞 直播'),
+        ])
+    ],
+}
+
 
 def debug_log(message, data=None):
     try:
-        log_dir = os.path.dirname(DEBUG_LOG)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir, exist_ok=True)
         line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}"
         if data is not None:
             if isinstance(data, (dict, list)):
@@ -50,34 +921,8 @@ def debug_log(message, data=None):
     except Exception:
         pass
 
-# ==================== 分类配置 ====================
-YOUTUBE_CLASSES = [
-    {"type_name": "推荐", "type_id": "YouTube 直播 24小時"},
-    {"type_id": "YouTube 新聞 Live", "type_name": "新闻直播"},
-    {"type_id": "劇集", "type_name": "剧集"},
-    {"type_id": "電影", "type_name": "电影"},
-    {"type_id": "动画片", "type_name": "动画片"},
-    {"type_id": "綜藝", "type_name": "综艺"},
-    {"type_id": "短劇", "type_name": "短剧"},
-    {"type_id": "紀錄片", "type_name": "纪录片"},
-    {"type_id": "體育", "type_name": "体育"},
-    {"type_id": "音樂", "type_name": "音乐"},
-    {"type_id": "放松", "type_name": "放松"},
-    {"type_id": "時尚潮流", "type_name": "时尚潮流"},
-    {"type_id": "宇宙", "type_name": "科普"},
-    {"type_id": "科技", "type_name": "科技"},
-    {"type_id": "解說", "type_name": "解说"},
-    {"type_id": "神秘", "type_name": "神秘"},
-    {"type_id": "4K", "type_name": "4K"},
-    {"type_id": "16K HDR", "type_name": "16K HDR"},
-    {"type_id": "LIST:自媒體 We Media,零度解说 @lingdujieshuo,老高與小茉 @laogao,李子柒 Liziqi @cnliziqi,康1+1 @user-mr5bh4bk8z,不良林,涌哥侃侃 @ygkkk,悟空的日常,Learn English with EnglishClass101.com,Speak English With Vanessa,Tangerine Academy,听笙阁 @tingshengge,李永樂老師 @TchLiyongle,滇西小哥 @dianxixiaoge,脑洞乌托邦 @NDWTB,自说自话的总裁 @STBoss,老肉雜談 @老肉雜談,老饭骨 @LaoFanGu,小高姐的 Magic Ingredients @MagicIngredients,小穎美食 @XiaoYingFood,primitivetechnology9550 @primitivetechnology9550,Mr Beast@MrBeast,Airforceproud95 @Airforceproud95,TheGreatWar @TheGreatWar,Mark Rober @MarkRober", "type_name": "自媒体"}
-]
 
-CATEGORY_FILTERS = {}
-
-# ==================== 核心提取类 ====================
 class YouTubeLite:
-    """普通视频提取"""
     def __init__(self, session, headers=None, config=None):
         self.session = session
         self.headers = headers or {}
@@ -85,125 +930,73 @@ class YouTubeLite:
         self.player_cache = {}
         self.extract_cache = {}
         self.sig_plan_cache = {}
-        self._last_api_ctx = {}
         self.extract_cache_ttl = int(self.config.get('extract_cache_ttl') or 300)
 
-    def extract(self, url_or_id, force=False):
+    def extract(self, url_or_id):
         video_id = self.extract_video_id(url_or_id)
         cached = self.extract_cache.get(video_id)
         now = time.time()
-        if not force and cached and cached.get('expires', 0) > now:
+        if cached and cached.get('expires', 0) > now:
+            debug_log('extract cache hit', {'video_id': video_id, 'ttl': int(cached.get('expires', 0) - now)})
             return cached.get('data')
         watch_url = f"https://www.youtube.com/watch?v={video_id}"
+        extract_started = time.time()
+        debug_log('extract start', {'input': url_or_id, 'video_id': video_id})
+        watch_started = time.time()
         page_resp = self._get(watch_url)
         page = page_resp.text
+        debug_log('watch page', {'status': page_resp.status_code, 'length': len(page), 'cost_ms': int((time.time() - watch_started) * 1000)})
         ytcfg = self._extract_ytcfg(page) or {}
         player_response = self._extract_initial_player_response(page) or {}
         player_url = self._extract_player_url(page)
         api_key = ytcfg.get('INNERTUBE_API_KEY') or self._search(r'"INNERTUBE_API_KEY":"([^"]+)"', page)
         visitor_data = self._extract_visitor_data(ytcfg, player_response)
+        # ANDROID_VR 返回明文 URL，不需要下載 base.js 提取 signatureTimestamp。
+        sts = None
+        debug_log('page parsed', {'has_ytcfg': bool(ytcfg), 'has_initial_pr': bool(player_response), 'initial_status': (player_response.get('playabilityStatus') or {}).get('status'), 'initial_has_streaming': bool(player_response.get('streamingData')), 'has_api_key': bool(api_key), 'has_visitor': bool(visitor_data), 'sts': sts, 'player_url': player_url})
         context = ytcfg.get('INNERTUBE_CONTEXT') or {
             'client': {'clientName': 'WEB', 'clientVersion': '2.20240310.01.00', 'hl': 'en', 'gl': 'US'}
         }
-        self._last_api_ctx[video_id] = {
-            'api_key': api_key,
-            'context': context,
-            'visitor_data': visitor_data,
-            'referer': watch_url,
-            'player_url': player_url,
-        }
-        responses = []
-        if player_response:
-            if not player_response.get('_client_name'):
-                player_response = dict(player_response)
-                player_response['_client_name'] = 'WEB'
-                player_response['_client_ua'] = (self.headers or {}).get('User-Agent')
-            responses.append(player_response)
+        responses = [player_response] if player_response else []
         if api_key:
-            api_responses = self._call_player_api(video_id, api_key, context, watch_url, visitor_data)
+            api_responses = self._call_player_api(video_id, api_key, context, watch_url, visitor_data, sts)
             if not isinstance(api_responses, list):
                 api_responses = [api_responses] if api_responses else []
             responses.extend([x for x in api_responses if x])
-        if not responses:
-            raise Exception('未获取到任何播放器响应')
-        data = self._build_data(video_id, responses, player_url)
-        self.extract_cache[video_id] = {'data': data, 'expires': time.time() + self.extract_cache_ttl}
-        return data
-
-    def refresh(self, video_id, prefer_client=None):
-        ctx = self._last_api_ctx.get(video_id) or {}
-        api_key = ctx.get('api_key')
-        if not api_key:
-            return self.extract(video_id, force=True)
-        try:
-            if prefer_client:
-                responses = self._call_player_api_single(
-                    video_id, api_key, prefer_client,
-                    ctx.get('referer') or f'https://www.youtube.com/watch?v={video_id}',
-                    ctx.get('visitor_data'),
-                    base_context=ctx.get('context'),
-                ) or []
-            else:
-                responses = self._call_player_api(
-                    video_id, api_key, ctx.get('context'),
-                    ctx.get('referer') or f'https://www.youtube.com/watch?v={video_id}',
-                    ctx.get('visitor_data'),
-                ) or []
-            responses = [x for x in responses if x]
-            if not responses:
-                return self.extract(video_id, force=True)
-            return self._build_data(video_id, responses, ctx.get('player_url') or '')
-        except Exception as e:
-            debug_log('refresh failed, fallback full extract', {'video_id': video_id, 'error': repr(e)})
-            return self.extract(video_id, force=True)
-
-    def _build_data(self, video_id, responses, player_url):
-        player_response = next((x for x in responses if (x.get('playabilityStatus') or {}).get('status') == 'OK'), responses[0] if responses else {})
+            debug_log('player api result', {'responses': len(api_responses), 'has_streaming': [bool((x or {}).get('streamingData')) for x in api_responses]})
+        player_response = next((x for x in responses if (x.get('playabilityStatus') or {}).get('status') == 'OK'), player_response)
         status = (player_response.get('playabilityStatus') or {}).get('status')
         streaming = player_response.get('streamingData') or {}
         if status and status not in ('OK', 'LIVE_STREAM_OFFLINE') and not streaming:
             reason = (player_response.get('playabilityStatus') or {}).get('reason') or status
             raise Exception(f'YouTube 不可播放: {reason}')
         details = player_response.get('videoDetails') or {}
-        formats, source_counts, cipher_count = self._collect_formats(responses, player_url)
-        if not formats:
-            raise Exception('未获取到可用播放地址')
-        hls_url = ''
-        for r in (responses or []):
-            sd = (r or {}).get('streamingData') or {}
-            if sd.get('hlsManifestUrl'):
-                hls_url = sd['hlsManifestUrl']
-                break
-        return {
-            'id': video_id,
-            'title': details.get('title') or video_id,
-            'duration': int(details.get('lengthSeconds') or 0),
-            'formats': formats,
-            'hls_url': hls_url,
-        }
-
-    def _collect_formats(self, responses, player_url):
         raw_formats = []
         seen_raw = set()
         source_counts = []
-        _client_rank = {'ANDROID_VR': 0, 'WEB_EMBEDDED_PLAYER': 1, 'TVHTML5_SIMPLY_EMBEDDED_PLAYER': 2, 'WEB': 3, 'ANDROID': 8, 'IOS': 9, 'MWEB': 10}
-        sorted_responses = sorted(
-            responses,
-            key=lambda r: _client_rank.get((r or {}).get('_client_name') or '', 9)
-        )
-        for response in sorted_responses:
-            response = response or {}
-            response_streaming = response.get('streamingData') or {}
+        for response in responses:
+            response_streaming = (response or {}).get('streamingData') or {}
             source_raw = (response_streaming.get('formats') or []) + (response_streaming.get('adaptiveFormats') or [])
+            hls = response_streaming.get('hlsManifestUrl')
+            if hls:
+                source_raw.append({
+                    'itag': 'hls',
+                    'url': hls,
+                    'mimeType': 'application/x-mpegURL; codecs="avc1"',
+                    'width': 1920,
+                    'height': 1080,
+                    'quality': 'hd1080'
+                })
             source_counts.append({'formats': len(response_streaming.get('formats') or []), 'adaptive': len(response_streaming.get('adaptiveFormats') or [])})
             for raw in source_raw:
                 key = (raw.get('itag'), raw.get('url') or raw.get('signatureCipher') or raw.get('cipher') or raw.get('mimeType'))
                 if key not in seen_raw:
                     seen_raw.add(key)
                     raw = raw.copy()
-                    raw['_client_name'] = response.get('_client_name')
-                    raw['_client_ua'] = response.get('_client_ua')
+                    raw['_client_name'] = (response or {}).get('_client_name')
+                    raw['_client_ua'] = (response or {}).get('_client_ua')
                     raw_formats.append(raw)
+        debug_log('raw formats', {'sources': source_counts, 'total': len(raw_formats), 'sample_keys': sorted(list(raw_formats[0].keys())) if raw_formats else []})
         formats = []
         cipher_count = 0
         for raw in raw_formats:
@@ -212,7 +1005,19 @@ class YouTubeLite:
             item = self._normalize_format(raw, player_url)
             if item and item.get('url'):
                 formats.append(item)
-        return formats, source_counts, cipher_count
+        debug_log('normalized formats', {'count': len(formats), 'cipher_count': cipher_count, 'progressive': len([x for x in formats if x.get('vcodec') != 'none' and x.get('acodec') != 'none'])})
+        if not formats:
+            raise Exception('未獲取到可用播放地址')
+        data = {
+            'id': video_id,
+            'title': details.get('title') or video_id,
+            'duration': int(details.get('lengthSeconds') or 0),
+            'formats': formats,
+            'is_live': details.get('isLive') or False,
+        }
+        self.extract_cache[video_id] = {'data': data, 'expires': time.time() + self.extract_cache_ttl}
+        debug_log('extract complete', {'video_id': video_id, 'cost_ms': int((time.time() - extract_started) * 1000), 'formats': len(formats)})
+        return data
 
     @staticmethod
     def extract_video_id(text):
@@ -224,36 +1029,18 @@ class YouTubeLite:
             m = re.search(pattern, text)
             if m:
                 return m.group(1)
-        raise Exception('无法识别 YouTube 视频 ID')
-
+        raise Exception('無法識別 YouTube 視頻 ID')
     def _client_name_id(self, client_name):
         return {
-            'WEB': 1, 'MWEB': 2, 'ANDROID': 3, 'IOS': 5,
-            'TVHTML5': 7, 'ANDROID_VR': 28,
-            'WEB_EMBEDDED_PLAYER': 56, 'WEB_REMIX': 67,
+            'WEB': 1,
+            'MWEB': 2,
+            'ANDROID': 3,
+            'IOS': 5,
+            'TVHTML5': 7,
+            'ANDROID_VR': 28,
+            'WEB_EMBEDDED_PLAYER': 56,
+            'WEB_REMIX': 67,
         }.get(client_name, 1)
-
-    # ========== ★ 修复 1：_client_preset 钉死 ANDROID_VR 版本 ==========
-    def _client_preset(self, client_name, base_context=None):
-        presets = {
-            'ANDROID_VR': {'client': {'clientName': 'ANDROID_VR', 'clientVersion': '1.65.10', 'deviceMake': 'Oculus', 'deviceModel': 'Quest 3', 'androidSdkVersion': 32, 'userAgent': 'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip', 'osName': 'Android', 'osVersion': '12L', 'hl': 'en', 'gl': 'US'}},
-            'WEB_EMBEDDED': {'client': {'clientName': 'WEB_EMBEDDED_PLAYER', 'clientVersion': '1.20240310.01.00', 'clientScreen': 'EMBED', 'userAgent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'hl': 'en', 'gl': 'US'}},
-            'TVHTML5': {'client': {'clientName': 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', 'clientVersion': '2.0', 'userAgent': 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version', 'hl': 'en', 'gl': 'US'}},
-            'WEB_SAFARI': {'client': {'clientName': 'WEB', 'clientVersion': '2.20240101.00.00', 'userAgent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15', 'hl': 'en', 'gl': 'US'}},
-            'ANDROID': {'client': {'clientName': 'ANDROID', 'clientVersion': '21.02.35', 'androidSdkVersion': 30, 'userAgent': 'com.google.android.youtube/21.02.35 (Linux; U; Android 11) gzip', 'osName': 'Android', 'osVersion': '11', 'hl': 'en', 'gl': 'US'}},
-            'IOS': {'client': {'clientName': 'IOS', 'clientVersion': '21.02.3', 'deviceMake': 'Apple', 'deviceModel': 'iPhone16,2', 'userAgent': 'com.google.ios.youtube/21.02.3 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)', 'osName': 'iPhone', 'osVersion': '18.3.2.22D82', 'hl': 'en', 'gl': 'US'}},
-            'MWEB': {'client': {'clientName': 'MWEB', 'clientVersion': '2.20260115.01.00', 'userAgent': 'Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)', 'hl': 'en', 'gl': 'US'}},
-        }
-        if client_name == 'WEB' and base_context:
-            return base_context
-        key = client_name
-        if client_name in ('WEB_EMBEDDED_PLAYER',):
-            key = 'WEB_EMBEDDED'
-        elif client_name in ('TVHTML5_SIMPLY_EMBEDDED_PLAYER',):
-            key = 'TVHTML5'
-        elif client_name == 'WEB':
-            key = 'WEB_SAFARI' if 'WEB_SAFARI' in presets else client_name
-        return presets.get(key) or presets.get(client_name) or base_context or presets['ANDROID_VR']
 
     def _extract_visitor_data(self, ytcfg, player_response):
         return (
@@ -263,6 +1050,15 @@ class YouTubeLite:
             or ((player_response.get('responseContext') or {}).get('visitorData'))
         )
 
+    def _extract_signature_timestamp(self, video_id, player_url, ytcfg=None):
+        try:
+            code = self._get_player_code(player_url)
+            sts = self._search(r'(?:signatureTimestamp|sts)\s*:\s*(\d{5})', code)
+            return int(sts) if sts else None
+        except Exception as e:
+            debug_log('sts extract error', repr(e))
+            return None
+
     def _get_po_token(self, client_name, context='gvs'):
         tokens = self.config.get('po_token') or self.config.get('po_tokens') or {}
         if isinstance(tokens, str):
@@ -270,29 +1066,6 @@ class YouTubeLite:
         if isinstance(tokens, dict):
             return tokens.get(f'{client_name}.{context}') or tokens.get(client_name) or tokens.get(context)
         return None
-
-    def _video_codec_priority(self, item):
-        mime = (item.get('mimeType') or '').lower()
-        codecs = (item.get('codecs') or '').lower()
-        if 'vp9.2' in mime or 'vp09.02' in codecs:
-            return 4
-        if 'vp9' in mime or 'vp09' in codecs:
-            return 3
-        if 'avc' in codecs or 'h264' in codecs:
-            return 2
-        if 'av01' in codecs:
-            return 1
-        return 0
-
-    def _is_hdr_video(self, item):
-        mime = (item.get('mimeType') or '').lower()
-        codecs = (item.get('codecs') or '').lower()
-        color = item.get('colorInfo') or {}
-        return 'vp9.2' in mime or 'vp09.02' in codecs or bool(color.get('hdrMetadataInfo'))
-
-    def _is_risky_best_video(self, item):
-        codecs = (item.get('codecs') or '').lower()
-        return 'av01' in codecs
 
     def choose_playable(self, formats, quality=None):
         all_videos = [x for x in formats if x.get('vcodec') != 'none' and x.get('acodec') == 'none']
@@ -313,27 +1086,181 @@ class YouTubeLite:
             candidates = all_videos
         if not candidates:
             return None
+        # 畫質優先，編碼順序 VP9/HDR > H264 > AV1。保留 VP9 Profile 2 HDR，
+        # 只把 AV1 放到最後，避免默認選到 itag 701/702 的超大 AV1 分段。
         candidates.sort(key=lambda x: (
             self._video_codec_priority(x),
             int(x.get('height') or 0),
             int(x.get('bitrate') or 0)
         ), reverse=True)
-        return candidates[0]
+        selected = candidates[0]
+        debug_log('video selected fast', {
+            'quality': quality,
+            'itag': selected.get('itag'),
+            'height': selected.get('height'),
+            'mime': selected.get('mimeType'),
+            'codec_priority': self._video_codec_priority(selected),
+            'candidates': len(candidates),
+            'probe_skipped': True,
+        })
+        return selected
+
+    def _video_codec_priority(self, item):
+        mime = (item.get('mimeType') or '').lower()
+        codecs = (item.get('codecs') or '').lower()
+        if 'vp9.2' in mime or 'vp09.02' in codecs:
+            return 4
+        if 'vp9' in mime or 'vp09' in codecs:
+            return 3
+        if 'avc' in codecs or 'h264' in codecs:
+            return 2
+        if 'av01' in codecs:
+            return 1
+        return 0
+
+    def _is_risky_best_video(self, item):
+        codecs = (item.get('codecs') or '').lower()
+        return 'av01' in codecs
+    def choose_video_tracks(self, formats, quality=None):
+        videos = [x for x in formats if x.get('vcodec') != 'none' and x.get('acodec') == 'none']
+    
+        # 根據 quality 設定畫質過濾
+        if quality == '4k':
+            videos = [x for x in videos if int(x.get('height') or 0) >= 2160]
+        elif quality == '2k':
+            videos = [x for x in videos if 1440 <= int(x.get('height') or 0) < 2160]
+        elif quality == '1080p':
+            videos = [x for x in videos if 1000 <= int(x.get('height') or 0) < 1440]
+        elif quality == 'best':
+            # 選最高畫質，沒有上限
+            pass
+        else:
+            # 默認至少 1080p
+            videos = [x for x in videos if int(x.get('height') or 0) >= 1080]
+
+        if not videos:
+            # 如果沒有符合條件的，取所有視頻
+            videos = [x for x in formats if x.get('vcodec') != 'none' and x.get('acodec') == 'none']
+
+        # 按畫質從高到低排序
+        videos.sort(key=lambda x: int(x.get('height') or 0), reverse=True)
+
+        # 優先選擇 VP9，如果沒有則選擇 H264，最後才是 AV1
+        vp9 = [x for x in videos if self._video_codec_priority(x) >= 3]
+        h264 = [x for x in videos if self._video_codec_priority(x) == 2]
+        av1 = [x for x in videos if self._video_codec_priority(x) == 1]
+
+        # 選擇最高畫質的 VP9，如果沒有則選擇 H264
+        selected_videos = vp9 if vp9 else (h264 if h264 else videos)
+
+        # 按畫質排序
+        selected_videos.sort(key=lambda x: (int(x.get('height') or 0), int(x.get('bitrate') or 0)), reverse=True)
+
+        # 分離 SDR 和 HDR
+        sdr = [x for x in selected_videos if not self._is_hdr_video(x)]
+        hdr = [x for x in selected_videos if self._is_hdr_video(x)]
+
+        tracks = []
+        if sdr:
+            item = sdr[0].copy()
+            item['track_name'] = 'SDR'
+            item['is_hdr'] = False
+            tracks.append(item)
+        if hdr:
+            item = hdr[0].copy()
+            item['track_name'] = 'HDR'
+            item['is_hdr'] = True
+            tracks.append(item)
+    
+        if not tracks:
+            # 如果還是沒有，取第一個可用的
+            item = self.choose_playable(formats, quality)
+            if item:
+                item = item.copy()
+                item['track_name'] = 'HDR' if self._is_hdr_video(item) else 'SDR'
+                item['is_hdr'] = self._is_hdr_video(item)
+                tracks.append(item)
+    
+        debug_log('video tracks selected', [{'name': x.get('track_name'), 'itag': x.get('itag'), 'height': x.get('height'), 'codecs': x.get('codecs')} for x in tracks])
+        return tracks
+
+    def _is_hdr_video(self, item):
+        mime = (item.get('mimeType') or '').lower()
+        codecs = (item.get('codecs') or '').lower()
+        color = item.get('colorInfo') or {}
+        return 'vp9.2' in mime or 'vp09.02' in codecs or bool(color.get('hdrMetadataInfo'))
 
     def choose_audio(self, formats):
         candidates = [x for x in formats if x.get('acodec') != 'none' and x.get('vcodec') == 'none']
         if not candidates:
             return None
         candidates.sort(key=lambda x: (1 if x.get('ext') == 'mp4' else 0, int(x.get('bitrate') or 0)), reverse=True)
-        return candidates[0]
+        selected = candidates[0]
+        debug_log('audio selected fast', {
+            'itag': selected.get('itag'),
+            'mime': selected.get('mimeType'),
+            'bitrate': selected.get('bitrate'),
+            'probe_skipped': True,
+        })
+        return selected
 
-    # ========== ★ 修复 2：_call_player_api 只请求 4 个安全客户端 ==========
+    def _probe_format(self, item):
+        try:
+            headers = self.headers.copy()
+            headers.update(item.get('headers') or {})
+            headers['Range'] = 'bytes=0-1'
+            r = self.session.get(item.get('url'), headers=headers, stream=True, timeout=10)
+            if r.url and r.url != item.get('url'):
+                item['url'] = r.url
+                item['redirected'] = True
+                debug_log('probe redirected url', self._url_summary(r.url))
+            status_code = r.status_code
+            r.close()
+            return status_code in (200, 206), status_code
+        except Exception as e:
+            return False, repr(e)
+
+    def choose_best_video_audio(self, formats):
+        videos = [x for x in formats if x.get('vcodec') != 'none' and x.get('acodec') == 'none']
+        audios = [x for x in formats if x.get('acodec') != 'none' and x.get('vcodec') == 'none']
+        videos.sort(key=lambda x: (int(x.get('height') or 0), int(x.get('bitrate') or 0)), reverse=True)
+        audios.sort(key=lambda x: int(x.get('bitrate') or 0), reverse=True)
+        return (videos[0] if videos else None), (audios[0] if audios else None)
+
+    def _url_summary(self, media_url):
+        parsed = urlparse(media_url or '')
+        query = parse_qs(parsed.query)
+        keys = ['itag', 'mime', 'c', 'expire', 'ip', 'mip', 'source', 'requiressl', 'gir', 'clen', 'dur', 'n', 'pot', 'sig', 'lsig', 'cms_redirect']
+        return {
+            'host': parsed.netloc,
+            'path': parsed.path,
+            'len': len(media_url or ''),
+            'params': {k: bool(query.get(k)) if k in ('pot', 'sig', 'lsig', 'cms_redirect') else (query.get(k, [''])[0][:80]) for k in keys if k in query}
+        }
+
+    def _get(self, url, **kwargs):
+        headers = self.headers.copy()
+        headers.update(kwargs.pop('headers', {}) or {})
+        r = self.session.get(url, headers=headers, timeout=kwargs.pop('timeout', 15), **kwargs)
+        r.raise_for_status()
+        return r
+
+    def _post_json(self, url, payload, headers=None):
+        h = self.headers.copy()
+        h.update({'Content-Type': 'application/json', 'Origin': 'https://www.youtube.com'})
+        if headers:
+            h.update({k: v for k, v in headers.items() if v})
+        r = self.session.post(url, json=payload, headers=h, timeout=15)
+        r.raise_for_status()
+        return r.json()
+
     def _call_player_api(self, video_id, api_key, context, referer, visitor_data=None, sts=None):
         clients = [
             {'client': {'clientName': 'ANDROID_VR', 'clientVersion': '1.65.10', 'deviceMake': 'Oculus', 'deviceModel': 'Quest 3', 'androidSdkVersion': 32, 'userAgent': 'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip', 'osName': 'Android', 'osVersion': '12L', 'hl': 'en', 'gl': 'US'}},
-            {'client': {'clientName': 'WEB_EMBEDDED_PLAYER', 'clientVersion': '1.20240310.01.00', 'clientScreen': 'EMBED', 'userAgent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36', 'hl': 'en', 'gl': 'US'}},
-            {'client': {'clientName': 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', 'clientVersion': '2.0', 'userAgent': 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version', 'hl': 'en', 'gl': 'US'}},
-            {'client': {'clientName': 'WEB', 'clientVersion': '2.20240101.00.00', 'userAgent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15', 'hl': 'en', 'gl': 'US'}},
+            {'client': {'clientName': 'ANDROID', 'clientVersion': '21.02.35', 'androidSdkVersion': 30, 'userAgent': 'com.google.android.youtube/21.02.35 (Linux; U; Android 11) gzip', 'osName': 'Android', 'osVersion': '11', 'hl': 'en', 'gl': 'US'}},
+            {'client': {'clientName': 'IOS', 'clientVersion': '21.02.3', 'deviceMake': 'Apple', 'deviceModel': 'iPhone16,2', 'userAgent': 'com.google.ios.youtube/21.02.3 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)', 'osName': 'iPhone', 'osVersion': '18.3.2.22D82', 'hl': 'en', 'gl': 'US'}},
+            context,
+            {'client': {'clientName': 'MWEB', 'clientVersion': '2.20260115.01.00', 'userAgent': 'Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)', 'hl': 'en', 'gl': 'US'}},
         ]
         results = []
         fallback = None
@@ -360,50 +1287,30 @@ class YouTubeLite:
                 if client_ua:
                     headers['User-Agent'] = client_ua
                 data = self._post_json(url, payload, headers=headers)
+                status = (data.get('playabilityStatus') or {}).get('status')
                 streaming = data.get('streamingData') or {}
-                if streaming:
+                formats = streaming.get('formats') or []
+                adaptive = streaming.get('adaptiveFormats') or []
+                direct_video = [x for x in adaptive if (x.get('url') or x.get('signatureCipher') or x.get('cipher')) and str(x.get('mimeType') or '').startswith('video/')]
+                direct_any = [x for x in formats + adaptive if x.get('url') or x.get('signatureCipher') or x.get('cipher')]
+                has_streaming = bool(streaming)
+                debug_log('player api client', {'client': client_name, 'status': status, 'has_streaming': has_streaming, 'formats': len(formats), 'adaptive': len(adaptive), 'direct_any': len(direct_any), 'direct_video': len(direct_video)})
+                if has_streaming:
                     data['_client_name'] = client_name
                     data['_client_ua'] = client_ua
                     results.append(data)
-                if fallback is None:
+                    # VR 明文格式最完整，成功後立即返回，避免再串行請求 4 個客戶端。
+                    if client_name == 'ANDROID_VR' and direct_video:
+                        debug_log('player api fast return', {'client': client_name, 'direct_video': len(direct_video)})
+                        return results
+                if has_streaming and fallback is None:
+                    fallback = data
+                elif fallback is None:
                     fallback = data
             except Exception as e:
                 debug_log('player api client error', {'client': client_name, 'error': repr(e)})
                 continue
         return results or ([fallback] if fallback else [])
-
-    def _call_player_api_single(self, video_id, api_key, client_name, referer, visitor_data=None, sts=None, base_context=None):
-        ctx = self._client_preset(client_name, base_context)
-        client = ctx.get('client') or {}
-        client_name = client.get('clientName') or client_name
-        try:
-            url = f'https://www.youtube.com/youtubei/v1/player?key={api_key}&prettyPrint=false'
-            payload = {
-                'context': ctx,
-                'videoId': video_id,
-                'playbackContext': {'contentPlaybackContext': {'html5Preference': 'HTML5_PREF_WANTS', **({'signatureTimestamp': sts} if sts else {})}},
-                'contentCheckOk': True,
-                'racyCheckOk': True,
-            }
-            headers = {
-                'Referer': referer,
-                'X-YouTube-Client-Name': str(self._client_name_id(client_name)),
-                'X-YouTube-Client-Version': client.get('clientVersion') or '',
-            }
-            if visitor_data:
-                headers['X-Goog-Visitor-Id'] = visitor_data
-            client_ua = client.get('userAgent')
-            if client_ua:
-                headers['User-Agent'] = client_ua
-            data = self._post_json(url, payload, headers=headers)
-            streaming = data.get('streamingData') or {}
-            if streaming:
-                data['_client_name'] = client_name
-                data['_client_ua'] = client_ua
-                return [data]
-        except Exception as e:
-            debug_log('player api single error', {'client': client_name, 'error': repr(e)})
-        return []
 
     def _normalize_format(self, fmt, player_url):
         media_url = fmt.get('url')
@@ -413,8 +1320,8 @@ class YouTubeLite:
                 media_url = self._decrypt_signature_cipher(cipher, player_url)
         if not media_url:
             return None
+        media_url = self._decrypt_nsig(media_url, player_url)
         client_name = fmt.get('_client_name')
-        media_url = self._decrypt_nsig(media_url, player_url, client_name)
         po_token = self._get_po_token(client_name, 'gvs') if client_name else None
         if po_token:
             sep = '&' if '?' in media_url else '?'
@@ -428,25 +1335,25 @@ class YouTubeLite:
         if fmt.get('_client_ua'):
             headers['User-Agent'] = fmt.get('_client_ua')
         return {
-            'itag': fmt.get('itag'), 'url': media_url, 'mimeType': mime,
-            'client': fmt.get('_client_name'), 'ext': ext,
-            'width': fmt.get('width') or 0, 'height': fmt.get('height') or 0,
-            'fps': fmt.get('fps') or 0, 'bitrate': fmt.get('bitrate') or fmt.get('averageBitrate') or 0,
+            'itag': fmt.get('itag'),
+            'url': media_url,
+            'mimeType': mime,
+            'client': fmt.get('_client_name'),
+            'ext': ext,
+            'width': fmt.get('width') or 0,
+            'height': fmt.get('height') or 0,
+            'fps': fmt.get('fps') or 0,
+            'bitrate': fmt.get('bitrate') or fmt.get('averageBitrate') or 0,
             'contentLength': fmt.get('contentLength'),
-            'initRange': fmt.get('initRange') or {}, 'indexRange': fmt.get('indexRange') or {},
-            'codecs': codecs, 'quality': fmt.get('qualityLabel') or fmt.get('quality'),
+            'initRange': fmt.get('initRange') or {},
+            'indexRange': fmt.get('indexRange') or {},
+            'codecs': codecs,
+            'quality': fmt.get('qualityLabel') or fmt.get('quality'),
             'colorInfo': fmt.get('colorInfo') or {},
             'vcodec': codecs if has_video else 'none',
             'acodec': codecs if has_audio else 'none',
             'headers': headers,
         }
-
-    def _build_format_headers(self, fmt, client_name=None, client_ua=None):
-        headers = (fmt.get('http_headers') or {}).copy()
-        ua = (fmt.get('headers') or {}).get('User-Agent') or fmt.get('_client_ua') or client_ua
-        if ua:
-            headers['User-Agent'] = ua
-        return headers
 
     def _decrypt_signature_cipher(self, cipher, player_url):
         data = parse_qs(cipher)
@@ -457,6 +1364,7 @@ class YouTubeLite:
             return ''
         if sig:
             decoded = self._decrypt_sig(sig, player_url)
+            debug_log('signature cipher', {'sp': sp, 'sig_len': len(sig), 'decoded_changed': decoded != sig, 'has_player': bool(player_url)})
             sep = '&' if '?' in media_url else '?'
             media_url = f'{media_url}{sep}{sp}={quote(decoded)}'
         return media_url
@@ -465,10 +1373,12 @@ class YouTubeLite:
         cache_key = player_url or ''
         if cache_key in self.sig_plan_cache:
             plan = self.sig_plan_cache.get(cache_key)
+            debug_log('sig plan cache', {'has_plan': bool(plan), 'plan': plan[:8] if plan else None})
         else:
             code = self._get_player_code(player_url)
             plan = self._extract_sig_plan(code)
             self.sig_plan_cache[cache_key] = plan
+            debug_log('sig plan', {'code_len': len(code), 'has_plan': bool(plan), 'plan': plan[:8] if plan else None})
         if not plan:
             return sig
         arr = list(sig)
@@ -482,56 +1392,23 @@ class YouTubeLite:
                 arr[0], arr[j] = arr[j], arr[0]
         return ''.join(arr)
 
-    # ========== ★ 修复 3：_decrypt_nsig 移动端客户端 n 参数原样保留 ==========
-    def _decrypt_nsig(self, media_url, player_url, client_name=None):
+    def _decrypt_nsig(self, media_url, player_url):
         try:
             parsed = urlparse(media_url)
             query = parse_qs(parsed.query)
             n_value = query.get('n', [None])[0]
             if not n_value:
                 return media_url
-
-            # ★★★ 移动端客户端 n 是明文，强行 JS 变换会让 URL 在 30-40 秒后失效 ★★★
-            if client_name and client_name in (
-                'ANDROID_VR', 'ANDROID', 'IOS',
-                'WEB_EMBEDDED_PLAYER', 'WEB_EMBEDDED',
-                'TVHTML5_SIMPLY_EMBEDDED_PLAYER', 'TVHTML5',
-            ):
-                return media_url
-
-            n_func = None
-            cache_key = f'nfunc_{player_url}'
-            if player_url and cache_key in self.player_cache:
-                cached = self.player_cache.get(cache_key)
-                if callable(cached):
-                    n_func = cached
-            elif player_url:
-                code = self._get_player_code(player_url)
-                if code:
-                    n_func = self._extract_n_function(code)
-                    self.player_cache[cache_key] = n_func
-
-            if n_func:
-                try:
-                    new_n = n_func(n_value)
-                    if new_n and new_n != n_value:
-                        new_query = {}
-                        for k, v_list in query.items():
-                            new_query[k] = [new_n] if k == 'n' else v_list
-                        new_query_str = urlencode(new_query, doseq=True)
-                        new_parsed = parsed._replace(query=new_query_str)
-                        new_path = new_parsed.path
-                        path_match = re.search(r'/n/([^/]+)', parsed.path)
-                        if path_match:
-                            new_path = parsed.path.replace(f"/n/{path_match.group(1)}", f"/n/{new_n}", 1)
-                        fixed = urlunparse(new_parsed._replace(path=new_path))
-                        return fixed
-                except Exception as e:
-                    debug_log('n transform error', {'error': repr(e), 'client': client_name})
-
+            path_match = re.search(r'/n/([^/]+)', parsed.path)
+            if path_match and path_match.group(1) != n_value:
+                new_path = parsed.path.replace(f"/n/{path_match.group(1)}", f"/n/{n_value}", 1)
+                fixed = urlunparse(parsed._replace(path=new_path))
+                debug_log('n path synced', {'old': path_match.group(1), 'new_len': len(n_value), 'changed': fixed != media_url})
+                return fixed
+            debug_log('n present', {'n_len': len(n_value), 'has_path_n': bool(path_match)})
             return media_url
         except Exception as e:
-            debug_log('n decrypt error', repr(e))
+            debug_log('n sync error', repr(e))
             return media_url
 
     def _get_player_code(self, player_url):
@@ -612,119 +1489,37 @@ class YouTubeLite:
         if not code:
             return None
         name = None
-        index = None
         for pattern in [
-            r'\.get\("n"\)\)&&\(b=([a-zA-Z0-9_$]+)(?:\[(\d+)\])?\([a-zA-Z0-9]\)',
+            r'\.get\("n"\)\)&&\(b=([a-zA-Z0-9_$]+)(?:\[(\d+)\])?\(b\)',
             r'\.get\("n"\)\)&&\(b=([a-zA-Z0-9_$]+)\(b\)',
-            r'b=String\.fromCharCode\(110\),c=a\.get\(b\)\)&&\(c=([a-zA-Z0-9_$]+)(?:\[(\d+)\])?\([a-zA-Z0-9]\)',
-            r'&&\(b="nn"\[\+[a-zA-Z0-9_$.]+\],c=a\.get\(b\)\)&&\(c=([a-zA-Z0-9_$]+)(?:\[(\d+)\])?\([a-zA-Z0-9]\)',
-            r'=([a-zA-Z0-9_$]+)(?:\[(\d+)\])?\([a-zA-Z]\),[a-zA-Z0-9_$]+\.set\("n",',
             r'([a-zA-Z0-9_$]+)=function\(a\)\{var b=a\.split\(""\)',
             r'function\s+([a-zA-Z0-9_$]+)\(a\)\{var b=a\.split\(""\)',
             r'([a-zA-Z0-9_$]+)=function\(a\)\{a=a\.split\(""\)',
         ]:
-            m = re.search(pattern, code, re.DOTALL)
+            m = re.search(pattern, code)
             if m:
                 name = m.group(1)
-                if m.lastindex and m.lastindex >= 2 and m.group(2):
-                    try:
-                        index = int(m.group(2))
-                    except (ValueError, TypeError):
-                        index = None
                 break
         if not name:
             return None
-        if index is not None:
-            array_pattern = r'var\s+' + re.escape(name) + r'\s*=\s*\[([^\]]+)\]'
-            am = re.search(array_pattern, code)
-            if am:
-                items = am.group(1).split(',')
-                if index < len(items):
-                    real_name = items[index].strip().strip('"\'')
-                    name = real_name
         body = self._extract_js_function_body(code, name)
+        debug_log('n function', {'name': name, 'body_len': len(body)})
         if not body:
             return None
-        helper_name = self._search(r'([a-zA-Z0-9_$]+)\.[a-zA-Z0-9_$]+\(a,\d+\)', body)
-        helper_map = {}
-        if helper_name:
-            helper_map = self._extract_helper_object(code, helper_name)
-        if helper_map:
-            plan = []
-            for part in body.split(';'):
-                part = part.strip()
-                if not part or part.startswith('var ') or part.startswith('a=') or 'return' in part:
-                    continue
-                if 'reverse()' in part:
-                    plan.append(('reverse', 0))
-                    continue
-                m = re.search(r'\.slice\((\d+)\)', part)
-                if m:
-                    plan.append(('slice', int(m.group(1))))
-                    continue
-                m = re.search(r'\.splice\(0,(\d+)\)', part)
-                if m:
-                    plan.append(('splice', int(m.group(1))))
-                    continue
-                m = re.search(r'([a-zA-Z0-9_$]+)\.([a-zA-Z0-9_$]+)\(a,(\d+)\)', part)
-                if m and m.group(1) == helper_name:
-                    op = helper_map.get(m.group(2))
-                    if op:
-                        plan.append((op, int(m.group(3))))
-            if plan:
-                def transform_plan(value):
-                    arr = list(value)
-                    for op, arg in plan:
-                        if op == 'reverse':
-                            arr.reverse()
-                        elif op in ('slice', 'splice'):
-                            arr = arr[arg:]
-                        elif op == 'swap' and arr:
-                            j = arg % len(arr)
-                            arr[0], arr[j] = arr[j], arr[0]
-                    return ''.join(arr) or value
-                return transform_plan
+
         def transform(value):
             arr = list(value)
             for part in body.split(';'):
-                part = part.strip()
-                if not part:
-                    continue
                 if 'reverse()' in part:
                     arr.reverse()
-                    continue
                 m = re.search(r'\.slice\((\d+)\)', part)
                 if m:
                     arr = arr[int(m.group(1)):]
-                    continue
                 m = re.search(r'\.splice\(0,(\d+)\)', part)
                 if m:
                     arr = arr[int(m.group(1)):]
-                    continue
-                m = re.search(r'a\[([^\]]+)\]\s*=\s*a\[([^\]]+)\]', part)
-                if m:
-                    try:
-                        idx1 = self._eval_js_index(m.group(1), len(arr))
-                        idx2 = self._eval_js_index(m.group(2), len(arr))
-                        if idx1 is not None and idx2 is not None:
-                            arr[idx1], arr[idx2] = arr[idx2], arr[idx1]
-                    except Exception:
-                        pass
-                    continue
             return ''.join(arr) or value
         return transform
-
-    def _eval_js_index(self, expr, arr_len):
-        expr = expr.strip()
-        if expr.isdigit() or (expr.startswith('-') and expr[1:].isdigit()):
-            return int(expr) % arr_len if arr_len > 0 else 0
-        m = re.match(r'a\.length\s*-\s*(\d+)', expr)
-        if m:
-            return (arr_len - int(m.group(1))) % arr_len
-        m = re.match(r'(\d+)\s*%\s*a\.length', expr)
-        if m:
-            return int(m.group(1)) % arr_len if arr_len > 0 else 0
-        return None
 
     def _extract_js_function_body(self, code, name):
         starts = []
@@ -829,532 +1624,377 @@ class YouTubeLite:
         m = re.search(pattern, text or '', re.S)
         return m.group(1) if m else default
 
-
-# ==================== 直播提取类 ====================
-class YouTubeLiveLite:
-    def __init__(self, session, headers=None, config=None):
-        self.session = session
-        self.headers = headers or {}
-        self.config = config or {}
-        self.cache = {}
-        self.cache_ttl = int(self.config.get('live_cache_ttl') or 45)
-
-    def extract_video_id(self, text):
-        text = str(text or '').strip()
-        for pattern in [
-            r'(?:v=|/v/|/embed/|/shorts/|youtu\.be/)([0-9A-Za-z_-]{11})',
-            r'^([0-9A-Za-z_-]{11})$',
-        ]:
-            match = re.search(pattern, text)
-            if match:
-                return match.group(1)
-        raise Exception('无法识别 YouTube 视频 ID')
-
-    def extract_live(self, url_or_id):
-        video_id = self.extract_video_id(url_or_id)
-        now = time.time()
-        cached = self.cache.get(video_id)
-        if cached and cached.get('expires', 0) > now:
-            return cached.get('data')
-        watch_url = f'https://www.youtube.com/watch?v={video_id}'
-        response = self._get(watch_url)
-        page = response.text
-        player_response = self._extract_initial_player_response(page) or {}
-        ytcfg = self._extract_ytcfg(page) or {}
-        api_key = ytcfg.get('INNERTUBE_API_KEY') or self._search(r'"INNERTUBE_API_KEY":"([^"]+)"', page)
-        visitor_data = self._extract_visitor_data(ytcfg, player_response)
-        status_obj = player_response.get('playabilityStatus') or {}
-        streaming = player_response.get('streamingData') or {}
-        details = player_response.get('videoDetails') or {}
-        page_hls_url = streaming.get('hlsManifestUrl') or ''
-        api_data = None
-        if api_key:
-            api_data = self._call_player_api(video_id, api_key, ytcfg, watch_url, visitor_data)
-            if api_data:
-                api_streaming = api_data.get('streamingData') or {}
-                api_details = api_data.get('videoDetails') or {}
-                api_hls_url = api_streaming.get('hlsManifestUrl') or ''
-                if api_hls_url:
-                    streaming = api_streaming
-                elif not page_hls_url and api_streaming:
-                    streaming = api_streaming
-                if api_details:
-                    details = api_details
-                status_obj = api_data.get('playabilityStatus') or status_obj
-        if not (streaming.get('hlsManifestUrl') or '') and page_hls_url:
-            streaming = dict(streaming or {})
-            streaming['hlsManifestUrl'] = page_hls_url
-        hls_url = streaming.get('hlsManifestUrl') or ''
-        is_live = bool(details.get('isLiveContent') or hls_url)
-        status = status_obj.get('status') or ''
-        reason = status_obj.get('reason') or ''
-        title = details.get('title') or video_id
-        data = {
-            'id': video_id, 'title': title, 'is_live': is_live,
-            'status': status, 'reason': reason, 'hls_url': hls_url,
-            'duration': int(details.get('lengthSeconds') or 0),
-        }
-        self.cache[video_id] = {'data': data, 'expires': time.time() + self.cache_ttl}
-        return data
-
-    def _get(self, url, **kwargs):
-        headers = self.headers.copy()
-        headers.update(kwargs.pop('headers', {}) or {})
-        response = self.session.get(url, headers=headers, timeout=kwargs.pop('timeout', 15), **kwargs)
-        response.raise_for_status()
-        return response
-
-    def _post_json(self, url, payload, headers=None):
-        final_headers = self.headers.copy()
-        final_headers.update({'Content-Type': 'application/json', 'Origin': 'https://www.youtube.com'})
-        if headers:
-            final_headers.update({k: v for k, v in headers.items() if v})
-        response = self.session.post(url, json=payload, headers=final_headers, timeout=15)
-        response.raise_for_status()
-        return response.json()
-
-    def _call_player_api(self, video_id, api_key, ytcfg, referer, visitor_data=None):
-        context = ytcfg.get('INNERTUBE_CONTEXT') or {
-            'client': {'clientName': 'WEB', 'clientVersion': '2.20240310.01.00', 'hl': 'en', 'gl': 'US'}
-        }
-        clients = [
-            {'client': {'clientName': 'ANDROID', 'clientVersion': '21.02.35', 'androidSdkVersion': 30, 'userAgent': 'com.google.android.youtube/21.02.35 (Linux; U; Android 11) gzip', 'osName': 'Android', 'osVersion': '11', 'hl': 'en', 'gl': 'US'}},
-            {'client': {'clientName': 'IOS', 'clientVersion': '21.02.3', 'deviceMake': 'Apple', 'deviceModel': 'iPhone16,2', 'userAgent': 'com.google.ios.youtube/21.02.3 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)', 'osName': 'iPhone', 'osVersion': '18.3.2.22D82', 'hl': 'en', 'gl': 'US'}},
-            {'client': {'clientName': 'MWEB', 'clientVersion': '2.20260115.01.00', 'userAgent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1', 'hl': 'en', 'gl': 'US'}},
-            context,
-        ]
-        for ctx in clients:
-            client = ctx.get('client') or {}
-            client_name = client.get('clientName') or 'WEB'
-            try:
-                url = f'https://www.youtube.com/youtubei/v1/player?key={quote(api_key)}&prettyPrint=false'
-                headers = {
-                    'Referer': referer,
-                    'X-YouTube-Client-Name': str(self._client_name_id(client_name)),
-                    'X-YouTube-Client-Version': client.get('clientVersion') or '',
-                }
-                if visitor_data:
-                    headers['X-Goog-Visitor-Id'] = visitor_data
-                if client.get('userAgent'):
-                    headers['User-Agent'] = client.get('userAgent')
-                payload = {
-                    'context': ctx,
-                    'videoId': video_id,
-                    'contentCheckOk': True,
-                    'racyCheckOk': True,
-                }
-                data = self._post_json(url, payload, headers=headers)
-                streaming = data.get('streamingData') or {}
-                if streaming.get('hlsManifestUrl'):
-                    data['_client_name'] = client_name
-                    return data
-            except Exception as e:
-                debug_log('live api client error', {'client': client_name, 'error': repr(e)})
-        return None
-
-    def _extract_visitor_data(self, ytcfg, player_response):
-        return (
-            self.config.get('visitor_data')
-            or ytcfg.get('VISITOR_DATA')
-            or (((ytcfg.get('INNERTUBE_CONTEXT') or {}).get('client') or {}).get('visitorData'))
-            or ((player_response.get('responseContext') or {}).get('visitorData'))
-        )
-
-    def _extract_ytcfg(self, text):
-        m = re.search(r'ytcfg\.set\s*\(\s*({.+?})\s*\)\s*;', text, re.S)
-        if not m:
-            return None
-        try:
-            return json.loads(m.group(1))
-        except Exception:
-            return None
-
-    def _extract_initial_player_response(self, text):
-        return self._extract_json_after(text, 'ytInitialPlayerResponse')
-
-    def _extract_json_after(self, text, marker):
-        pos = text.find(marker)
-        if pos < 0:
-            return None
-        start = text.find('{', pos)
-        if start < 0:
-            return None
-        depth = 0
-        in_str = None
-        escape = False
-        for i in range(start, len(text)):
-            ch = text[i]
-            if escape:
-                escape = False
-                continue
-            if ch == '\\':
-                escape = True
-                continue
-            if in_str:
-                if ch == in_str:
-                    in_str = None
-                continue
-            if ch == '"':
-                in_str = ch
-                continue
-            if ch == '{':
-                depth += 1
-            elif ch == '}':
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(text[start:i + 1])
-                    except Exception:
-                        return None
-        return None
-
-    @staticmethod
-    def _search(pattern, text, default=None):
-        m = re.search(pattern, text or '', re.S)
-        return m.group(1) if m else default
-
-    def _client_name_id(self, client_name):
-        return {
-            'WEB': 1, 'MWEB': 2, 'ANDROID': 3, 'IOS': 5,
-            'TVHTML5': 7, 'ANDROID_VR': 28,
-            'WEB_EMBEDDED_PLAYER': 56, 'WEB_REMIX': 67,
-        }.get(client_name, 1)
-
-
-# ==================== 主 Spider 类 ====================
 class Spider(Spider):
     def getName(self):
-        return 'YouTube 视频+直播（修复版）'
+        return 'YouTube視頻'
 
     def init(self, extend):
         try:
             self.extendDict = json.loads(extend) if extend else {}
         except Exception:
             self.extendDict = {}
-
         self.session = requests.Session()
-        self.session.trust_env = True
-
         self.proxy_str = None
-        proxy = self.extendDict.get('proxy')
-        if proxy:
-            if isinstance(proxy, str):
-                if not proxy.startswith('http://') and not proxy.startswith('https://'):
-                    proxy = 'http://' + proxy
-                self.session.proxies = {'http': proxy, 'https': proxy}
-                self.proxy_str = proxy.replace('http://', '').replace('https://', '')
-            elif isinstance(proxy, dict):
-                proxies = {}
-                for k, v in proxy.items():
-                    if k in ('http', 'https') and v:
-                        if not v.startswith('http://') and not v.startswith('https://'):
-                            v = 'http://' + v
-                        proxies[k] = v
-                if proxies:
-                    self.session.proxies = proxies
-                    self.proxy_str = (proxies.get('https') or proxies.get('http') or '').replace('http://', '').replace('https://', '')
-                else:
-                    self._auto_detect_proxy()
-            else:
-                self._auto_detect_proxy()
-        else:
-            self._auto_detect_proxy()
-
-        self._load_cookies()
-
-        self.yt_classes = YOUTUBE_CLASSES
-        self.yt_filters = CATEGORY_FILTERS
-
+        proxy_val = self.extendDict.get('proxy')
+        if proxy_val:
+            if isinstance(proxy_val, dict):
+                self.session.proxies = proxy_val
+                self.proxy_str = (proxy_val.get('http') or proxy_val.get('https') or '').replace('http://', '').replace('https://', '')
+            elif isinstance(proxy_val, str):
+                self.proxy_str = proxy_val.replace('http://', '').replace('https://', '')
+                proxy_url = f'http://{self.proxy_str}'
+                self.session.proxies = {'http': proxy_url, 'https': proxy_url}
         self.header = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
             'Referer': 'https://www.youtube.com/'
         }
         self.session.headers.update(self.header)
-
-        self.yt_video = YouTubeLite(self.session, self.header, self.extendDict)
-        self.yt_live = YouTubeLiveLite(self.session, self.header, self.extendDict)
+        self.yt = YouTubeLite(self.session, self.header, self.extendDict)
+        self.config = {}
         self.search_page_cache = {}
-        self.live_search_cache = {}
-        self.hls_url_cache = {}
-        self.hls_proxy_enabled = self.extendDict.get('hls_proxy', True) is not False
-        self._hls_key_seq = 0
-        self.direct_segments = str(self.extendDict.get('seg') or 'proxy').lower() == 'direct'
 
-        self.media_fresh_cache = {}
-        self.media_fresh_ttl = int(self.extendDict.get('media_refresh_ttl') or 300)
-        self.media_force_refresh_sec = int(self.extendDict.get('media_force_refresh_sec') or 600)
-        self._media_locks = {}
-        self._media_locks_lock = threading.Lock()
-        self._proxy_refresh_ts = {}
-        self._proxy_fail_count = {}
-        self._proxy_min_refresh_interval = float(self.extendDict.get('proxy_min_refresh_interval') or 10)
-
-    def _parse_cookie_string(self, raw):
-        count = 0
-        for part in (raw or '').split(';'):
-            part = part.strip()
-            if not part or '=' not in part:
-                continue
-            name, value = part.split('=', 1)
-            name = name.strip()
-            value = value.strip()
-            if not name:
-                continue
-            if name.startswith('#') or name in ('TRUE', 'FALSE'):
-                continue
-            self.session.cookies.set(name, value, domain='.youtube.com', path='/')
-            count += 1
-        return count
-
-    def _load_cookies(self):
-        cookie_src = (
-            self.extendDict.get('cookie')
-            or self.extendDict.get('cookies')
-            or self.extendDict.get('cookiefile')
-            or self.extendDict.get('cookies_file')
-        )
-        if not cookie_src:
-            default_paths = [
-                '/storage/emulated/0/Download/cookies.txt',
-                '/storage/emulated/0/Download/ytb_cookies.txt',
-                '/storage/emulated/0/Download/youtube_cookies.txt',
-                os.path.join(os.path.dirname(__file__), 'cookies.txt'),
-                os.path.join(os.path.dirname(__file__), 'ytb_cookies.txt'),
-            ]
-            for p in default_paths:
-                if os.path.isfile(p):
-                    cookie_src = p
-                    break
-        if not cookie_src:
-            return False
-        try:
-            if os.path.isfile(str(cookie_src)):
-                with open(str(cookie_src), 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read().strip()
-                is_netscape = (
-                    content.startswith('#') or '\t' in content
-                    or '	' in content or 'Netscape' in content[:200]
-                )
-                if is_netscape:
-                    try:
-                        from http.cookiejar import MozillaCookieJar
-                        jar = MozillaCookieJar(str(cookie_src))
-                        jar.load(ignore_discard=True, ignore_expires=True)
-                        count = 0
-                        for c in jar:
-                            domain = (c.domain or '')
-                            if 'youtube.com' in domain or 'google.com' in domain:
-                                self.session.cookies.set_cookie(c)
-                                count += 1
-                        if count > 0:
-                            return True
-                    except Exception as e:
-                        debug_log('Netscape 解析失败', repr(e))
-                if '=' in content and ';' in content:
-                    count = self._parse_cookie_string(content)
-                    if count > 0:
-                        return True
-                return False
-            if isinstance(cookie_src, str) and '=' in cookie_src:
-                count = self._parse_cookie_string(cookie_src)
-                if count > 0:
-                    return True
-                return False
-            if isinstance(cookie_src, dict):
-                for k, v in cookie_src.items():
-                    self.session.cookies.set(str(k), str(v), domain='.youtube.com', path='/')
-                return True
-        except Exception as e:
-            debug_log('cookie 加载失败', repr(e))
-            return False
-        return False
-
-    def _auto_detect_proxy(self):
-        proxy_list = [
-            "http://127.0.0.1:2080", "http://127.0.0.1:7890", "http://127.0.0.1:10809",
-            "http://127.0.0.1:10172", "http://127.0.0.1:20172", "http://127.0.0.1:7891",
-            "http://127.0.0.1:10808", "http://127.0.0.1:1087", "http://127.0.0.1:3128",
-            "http://127.0.0.1:1080", "http://127.0.0.1:8080", "http://127.0.0.1:9090"
-        ]
-        for p in proxy_list:
-            try:
-                test_proxies = {'http': p, 'https': p}
-                r = requests.get('https://www.youtube.com', proxies=test_proxies, timeout=2)
-                if r.status_code < 400:
-                    self.session.proxies = test_proxies
-                    self.proxy_str = p.replace('http://', '').replace('https://', '')
-                    return
-            except Exception:
-                continue
-        self.session.proxies = {}
-        self.proxy_str = ''
-
-    def _get_media_lock(self, video_id):
-        with self._media_locks_lock:
-            if video_id not in self._media_locks:
-                self._media_locks[video_id] = threading.Lock()
-            return self._media_locks[video_id]
-
-    def _get_url_expire(self, url):
-        try:
-            parsed = urlparse(url)
-            query = parse_qs(parsed.query)
-            expire = query.get('expire', ['0'])[0]
-            return int(expire) if expire and expire.isdigit() else 0
-        except Exception:
-            return 0
-
-    def _fresh_media_data(self, video_id, ttl=None, current_url=None, force=False, prefer_client=None):
-        ttl = self.media_fresh_ttl if ttl is None else ttl
-        lock = self._get_media_lock(video_id)
-        with lock:
-            now = time.time()
-            cached = self.media_fresh_cache.get(video_id)
-            need_refresh = bool(force)
-            if not cached:
-                need_refresh = True
-            else:
-                url_expire = cached.get('url_expire', 0)
-                if url_expire > 0 and url_expire - now > 180:
-                    need_refresh = False
-                elif cached.get('expires', 0) <= now:
-                    need_refresh = True
-                elif url_expire > 0 and url_expire - now < 180:
-                    need_refresh = True
-                refreshed_at = cached.get('refreshed_at', 0)
-                if (not url_expire) and refreshed_at and (now - refreshed_at) >= self.media_force_refresh_sec:
-                    need_refresh = True
-                if current_url:
-                    cur_expire = self._get_url_expire(current_url)
-                    if cur_expire > 0 and cur_expire - now < 180:
-                        need_refresh = True
-                    elif cur_expire > 0 and cur_expire - now > 180:
-                        need_refresh = False
-            if not need_refresh:
-                return cached.get('data')
-            try:
-                data = self.yt_video.refresh(video_id, prefer_client=prefer_client)
-            except Exception:
-                data = self.yt_video.extract(video_id, force=True)
-            formats = data.get('formats', [])
-            if prefer_client and cached and cached.get('data'):
-                old_formats = cached['data'].get('formats') or []
-                new_keys = {(f.get('client'), f.get('itag')) for f in formats}
-                merged = list(formats)
-                for f in old_formats:
-                    key = (f.get('client'), f.get('itag'))
-                    if key not in new_keys:
-                        merged.append(f)
-                data = dict(data)
-                data['formats'] = merged
-                formats = merged
-            earliest_expire = float('inf')
-            for f in formats:
-                exp = self._get_url_expire(f.get('url', ''))
-                if exp > 0 and exp < earliest_expire:
-                    earliest_expire = exp
-            self.media_fresh_cache[video_id] = {
-                'data': data,
-                'expires': now + ttl,
-                'url_expire': earliest_expire if earliest_expire != float('inf') else 0,
-                'refreshed_at': now,
-            }
-            return data
-
-    def _can_force_refresh(self, vid, force_first=False):
-        now = time.time()
-        last = self._proxy_refresh_ts.get(vid) or 0
-        interval = getattr(self, '_proxy_min_refresh_interval', 10) or 10
-        if force_first and (now - last) >= 1.0:
-            self._proxy_refresh_ts[vid] = now
-            return True
-        if now - last < interval:
-            return False
-        self._proxy_refresh_ts[vid] = now
-        return True
-
-    # ========== 分类 / 搜索 ==========
     def homeContent(self, filter):
-        result = {'class': self.yt_classes}
+        result = {'class': YOUTUBE_CLASSES}
         if filter:
-            video_filters = {}
-            for c in self.yt_classes:
-                cid = c['type_id']
-                if cid in self.yt_filters:
-                    video_filters[cid] = self.yt_filters[cid]
-            result['filters'] = video_filters
+            result['filters'] = CATEGORY_FILTERS
         return result
 
     def homeVideoContent(self):
         return {'list': []}
 
     def categoryContent(self, cid, page, filter, ext):
-        page = int(page or 1)
+        page = int(page)
         filters = ext if isinstance(ext, dict) else {}
-        if self._is_live_category(cid):
-            keyword = self._build_live_keyword(cid, filters)
-            videos, has_more = self._search_live_page(keyword, page)
-        else:
-            keyword = self._build_video_keyword(cid, filters)
-            videos, has_more = self._search_video_page(keyword, page)
-        return {
-            'list': videos, 'page': page,
-            'pagecount': page + 1 if has_more else page,
-            'limit': len(videos), 'total': len(videos)
-        }
+        query = self._build_category_keyword(cid, filters)
+        extra_params = {}
+
+        if cid == '漫劇':
+            duration = filters.get('duration')
+            if duration:
+                # 映射 duration 值到 sp
+                sp_map = {
+                    'short': 'EgIIAW',
+                    'medium': 'EgIIAQ',
+                    'long': 'EgIIAw',
+                }
+                sp = sp_map.get(duration)
+                if sp:
+                    extra_params['sp'] = sp
+
+        videos, has_more = self._search_youtube_page(query, page, extra_params=extra_params)
+    
+        # 保留原有的直播过滤（如果需要）
+        if cid in ('即時影像', '新聞直播') or any(kw in query.lower() for kw in ['即時影像', 'livecam', 'live cam', 'cctv', '直播']):
+            live_only = [v for v in videos if v.get('is_live') or '🔴' in v.get('vod_remarks', '') or 'LIVE' in v.get('vod_name', '').upper() or '直播' in v.get('vod_name', '')]
+            if live_only:
+                videos = live_only
+
+        return {'list': videos, 'page': page, 'pagecount': page + 1 if has_more else page, 'limit': len(videos), 'total': len(videos)}
 
     def searchContent(self, key, quick, pg=1):
-        page = int(pg or 1)
-        keyword = str(key or '').strip()
-        videos_v, _ = self._search_video_page(keyword, page)
-        live_keyword = f'{keyword} live' if 'live' not in keyword.lower() and '直播' not in keyword else keyword
-        videos_l, _ = self._search_live_page(live_keyword, page)
-        seen = set()
-        merged = []
-        for v in videos_v + videos_l:
-            if v['vod_id'] not in seen:
-                seen.add(v['vod_id'])
-                merged.append(v)
-        return {
-            'list': merged[:30], 'page': page,
-            'pagecount': page + 1, 'limit': len(merged), 'total': len(merged)
+        page = int(pg)
+        videos, has_more = self._search_youtube_page(key, page)
+        return {'list': videos, 'page': page, 'pagecount': page + 1 if has_more else page, 'limit': len(videos), 'total': len(videos)}
+
+    def detailContent(self, did):
+        video_id = did[0]
+        title = self._get_video_title(video_id)
+        safe_title = self._safe_title(title)
+        play_sources = []
+        play_urls = []
+        try:
+            data = self.yt.extract(video_id)
+            tracks = self.yt.choose_video_tracks(data.get('formats') or [], 'best')
+            for track in tracks:
+                height = int(track.get('height') or 0)
+                kind = track.get('track_name') or ('HDR' if track.get('is_hdr') else 'SDR')
+                name = f'{height}p {kind}' if height else kind
+                quality = 'hdr' if kind == 'HDR' else 'best'
+                play_sources.append(name)
+                play_urls.append(f'{safe_title} {name}${video_id}@{quality}')
+            debug_log('detail dynamic sources', {'video_id': video_id, 'sources': play_sources})
+        except Exception as e:
+            debug_log('detail dynamic sources error', {'video_id': video_id, 'error': repr(e)})
+        if not play_sources:
+            play_sources = ['SDR', 'HDR']
+            play_urls = [
+                f'{safe_title} SDR${video_id}@best',
+                f'{safe_title} HDR${video_id}@hdr',
+            ]
+        vod = {
+            'vod_id': video_id,
+            'vod_name': title,
+            'vod_pic': f'https://img.youtube.com/vi/{video_id}/hqdefault.jpg',
+            'vod_play_from': '$$$'.join(play_sources),
+            'vod_play_url': '$$$'.join(play_urls)
         }
+        return {'list': [vod]}
 
-    def _is_live_category(self, cid):
-        return 'live' in cid.lower() or '直播' in cid.lower()
+    def _build_direct_play_url(self, media_url, headers, ext):
+        header_query = urlencode({k: v for k, v in (headers or {}).items() if v})
+        return f'{media_url}|{header_query}' if header_query else media_url
 
-    def _build_live_keyword(self, cid, filters=None):
-        terms = [cid]
-        if isinstance(filters, dict):
-            for value in filters.values():
-                term = self._normalize_filter_term(value)
-                if term:
-                    terms.append(term)
-        keyword = ' '.join([x for x in terms if x]).strip()
-        if 'live' not in keyword.lower() and '直播' not in keyword:
-            keyword = f'{keyword} live'
-        return keyword
-
-    def _build_video_keyword(self, cid, filters=None):
-        if cid.startswith('LIST:'):
-            raw = cid[5:].strip()
-            channels = [ch.strip() for ch in raw.split(',') if ch.strip()]
-            terms = []
-            for ch in channels:
-                if ch.startswith('@'):
-                    terms.append(f'channel:{ch}')
-                else:
-                    terms.append(f'"{ch}"')
-            keyword = ' OR '.join(terms) if terms else ''
+    def playerContent(self, flag, pid, vipFlags):
+        raw_pid = pid.split('$')[-1]
+        if '@' in raw_pid:
+            video_id, quality = raw_pid.rsplit('@', 1)
         else:
-            keyword = cid
-        if isinstance(filters, dict):
-            for value in filters.values():
-                term = self._normalize_filter_term(value)
-                if term:
-                    keyword += ' ' + term
-        return keyword.strip()
+            video_id, quality = raw_pid, '1080p'
+
+        if quality not in ('best', 'hdr', '4k', '2k', '1080p'):
+            quality = 'best'
+
+        debug_log('playerContent', {'flag': flag, 'pid': pid, 'video_id': video_id, 'quality': quality})
+
+        try:
+            data = self.yt.extract(video_id)
+
+            # 優先選擇 progressive 格式（同時包含視頻和音頻）
+            progressive = self.yt.choose_best_progressive(data['formats'], quality)
+            if progressive:
+                headers = self.header.copy()
+                headers.update(progressive.get('headers') or {})
+                debug_log('using progressive format', {
+                    'itag': progressive.get('itag'),
+                    'height': progressive.get('height'),
+                    'codecs': progressive.get('codecs')
+                })
+                return {'parse': 0, 'jx': 0, 'url': progressive['url'], 'header': headers}
+
+            all_tracks = self.yt.choose_video_tracks(data['formats'], quality)
+
+            if quality == 'hdr':
+                wanted_name = 'HDR'
+            else:
+                wanted_name = 'SDR'
+
+            video_tracks = [x for x in all_tracks if x.get('track_name') == wanted_name]
+            if not video_tracks and all_tracks:
+                video_tracks = [all_tracks[0]]
+
+            if video_tracks:
+                # 處理直播
+                hls_track = next((t for t in data['formats'] if t.get('itag') == 'hls'), None)
+                if data.get('is_live') and hls_track:
+                    headers = self.header.copy()
+                    headers.update(hls_track.get('headers') or {})
+                    return {'parse': 0, 'jx': 0, 'url': hls_track['url'], 'header': headers, 'format': 'application/x-mpegURL'}
+
+                # 直接播放視頻（不經過代理，支援快進）
+                playable = video_tracks[0]
+                headers = self.header.copy()
+                headers.update(playable.get('headers') or {})
+
+                debug_log('direct play video', {
+                    'itag': playable.get('itag'),
+                    'height': playable.get('height'),
+                    'acodec': playable.get('acodec'),
+                    'vcodec': playable.get('vcodec')
+                })
+                return {'parse': 0, 'jx': 0, 'url': playable['url'], 'header': headers}
+
+            raise Exception(f'沒有可直接播放的 {quality} 視頻流格式')
+
+        except Exception as e:
+            debug_log('playerContent error', repr(e))
+            print(f'[YouTubeLite] 解析失敗: {e}')
+            res = {'parse': 1, 'url': f'https://www.youtube.com/embed/{video_id}?autoplay=1', 'header': json.dumps(self.header)}
+            if self.proxy_str:
+                res['proxy'] = self.proxy_str
+            return res
+    
+    def localProxy(self, params):
+        if params.get('do') != 'py':
+            return None
+        if params.get('type') == 'mpd':
+            return self._proxy_mpd(params)
+        if params.get('type') == 'media':
+            return self._proxy_media(params)
+        if params.get('type') == 'single':
+            return self._proxy_single(params)
+        return None
+
+    def _proxy_single(self, params):
+        vid = params.get('vid')
+        debug_log('proxy single request', {'vid': vid, 'range': params.get('range'), 'keys': sorted(list(params.keys()))[:20]})
+        data = self.getCache(f'yt_single_{vid}') if vid else None
+        if not data:
+            return [404, 'text/plain', '播放緩存已過期或不存在']
+        target_url = data.get('url')
+        if not target_url:
+            return [404, 'text/plain', '播放地址不存在']
+        headers = (data.get('headers') or self.header).copy()
+        range_header = params.get('range') or params.get('Range')
+        if range_header:
+            headers['Range'] = range_header
+        try:
+            r = self.session.get(target_url, headers=headers, stream=True, timeout=30)
+
+            if r.status_code in (200, 206, 416):
+                content_type = r.headers.get('content-type', 'video/mp4')
+                resp_headers = {
+                    'Content-Type': content_type,
+                    'Accept-Ranges': 'bytes',
+                    'Cache-Control': 'no-cache',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Expose-Headers': 'Content-Range,Content-Length',
+                }
+                if r.headers.get('content-range'):
+                    resp_headers['Content-Range'] = r.headers.get('content-range')
+                if r.headers.get('content-length'):
+                    resp_headers['Content-Length'] = r.headers.get('content-length')
+
+                debug_log('proxy single response', {
+                    'status': r.status_code, 
+                    'content_type': content_type,
+                    'content_range': r.headers.get('content-range')
+                })
+
+                return {
+                    'status': r.status_code,
+                    'content_type': content_type,
+                    'headers': resp_headers,
+                    'content': r.iter_content(chunk_size=8192)
+                }
+            else:
+                return [r.status_code, 'text/plain', f'YouTube 服務器返回錯誤: {r.status_code}']
+        except Exception as e:
+            debug_log('proxy single error', repr(e))
+            return [500, 'text/plain', f'代理播放失敗: {str(e)}']
+
+    def _proxy_mpd(self, params):
+        vid = params.get('vid')
+        quality = params.get('quality') or '1080p'
+        data = self.getCache(f'yt_{vid}_{quality}') if vid else None
+        if not data:
+            return [404, 'text/plain', '視頻緩存已過期或不存在']
+        audio_url = data.get('audio_url')
+        duration = data.get('duration') or 0
+        video_tracks = data.get('video_tracks') or [data.get('video_item') or {}]
+        audio_item = data.get('audio_item') or {}
+        media_base = f'http://127.0.0.1:9978/proxy?do=py&type=media&vid={vid}&quality={quality}'
+        direct_segments = str(self.extendDict.get('seg') or 'proxy').lower() == 'direct'
+        duration_pt = f"PT{int(duration or 0)}S"
+        mpd = f'''<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="{duration_pt}" minBufferTime="PT1.5S" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period id="1" start="PT0S">
+'''
+        for item in video_tracks:
+            init_range = item.get('initRange') or {}
+            index_range = item.get('indexRange') or {}
+            name = item.get('track_name') or ('HDR' if item.get('is_hdr') else 'SDR')
+            base_url = item.get('url') if direct_segments else media_base + f"&track=video&itag={item.get('itag')}"
+            mpd += f'''    <AdaptationSet mimeType="{html.escape((item.get('mimeType') or 'video/webm').split(';')[0])}" startWithSAP="1" segmentAlignment="true" scanType="progressive">
+      <Representation id="v{item.get('itag', 1)}" bandwidth="{item.get('bitrate', 1000000)}" codecs="{html.escape(item.get('codecs') or '')}" height="{item.get('height', 0)}" width="{item.get('width', 0)}">
+        <BaseURL>{html.escape(base_url)}</BaseURL>
+        <SegmentBase indexRange="{index_range.get('start', '0')}-{index_range.get('end', '0')}"><Initialization range="{init_range.get('start', '0')}-{init_range.get('end', '0')}"/></SegmentBase>
+      </Representation>
+    </AdaptationSet>
+'''
+        if audio_url:
+            audio_init = audio_item.get('initRange') or {}
+            audio_index = audio_item.get('indexRange') or {}
+            audio_base = audio_url if direct_segments else media_base + '&track=audio'
+            mpd += f'''    <AdaptationSet mimeType="{html.escape((audio_item.get('mimeType') or 'audio/mp4').split(';')[0])}" startWithSAP="1" segmentAlignment="true" lang="und">
+      <Representation id="audio" bandwidth="{audio_item.get('bitrate', 128000)}" codecs="{html.escape(audio_item.get('codecs') or '')}" audioSamplingRate="44100">
+        <BaseURL>{html.escape(audio_base)}</BaseURL>
+        <SegmentBase indexRange="{audio_index.get('start', '0')}-{audio_index.get('end', '0')}"><Initialization range="{audio_init.get('start', '0')}-{audio_init.get('end', '0')}"/></SegmentBase>
+      </Representation>
+    </AdaptationSet>
+'''
+        mpd += '  </Period>\n</MPD>'
+        debug_log('proxy mpd tracks', {'vid': vid, 'quality': quality, 'tracks': [{'name': x.get('track_name'), 'itag': x.get('itag')} for x in video_tracks], 'audio': audio_item.get('itag'), 'direct': direct_segments, 'duration': duration_pt})
+        return [200, 'application/dash+xml', mpd]
+
+    def _proxy_media(self, params):
+        vid = params.get('vid')
+        quality = params.get('quality') or '1080p'
+        track = params.get('track')
+        data = self.getCache(f'yt_{vid}_{quality}') if vid else None
+        if not data or track not in ('video', 'audio'):
+            return [404, 'text/plain', '媒體不存在']
+
+        if track == 'video':
+            wanted_itag = str(params.get('itag') or '')
+            tracks = data.get('video_tracks') or [data.get('video_item') or {}]
+            media_item = next((x for x in tracks if str(x.get('itag')) == wanted_itag), tracks[0] if tracks else {})
+            target_url = media_item.get('url')
+        else:
+            media_item = data.get('audio_item') or {}
+            target_url = data.get('audio_url') or media_item.get('url')
+
+        if not target_url:
+            return [404, 'text/plain', f'{track} 流不存在']
+
+        headers = self.header.copy()
+        headers.update((media_item or {}).get('headers') or {})
+
+        # 處理 Range 請求頭（快進需要）
+        range_header = params.get('range') or params.get('Range')
+        if range_header:
+            headers['Range'] = range_header
+
+        try:
+            # 使用 stream=True 進行流式請求
+            r = self.session.get(target_url, headers=headers, stream=True, timeout=30)
+
+            # 檢查響應狀態
+            if r.status_code in (200, 206):
+                content_type = r.headers.get('content-type', 'application/octet-stream')
+
+                # 構建響應頭
+                resp_headers = {
+                    'Content-Type': content_type,
+                    'Accept-Ranges': 'bytes',
+                    'Cache-Control': 'no-cache',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Expose-Headers': 'Content-Range,Content-Length',
+                }
+
+                # 轉發 Content-Range（對 206 響應很重要）
+                if r.headers.get('content-range'):
+                    resp_headers['Content-Range'] = r.headers.get('content-range')
+
+                # 轉發 Content-Length
+                if r.headers.get('content-length'):
+                    resp_headers['Content-Length'] = r.headers.get('content-length')
+
+                debug_log('proxy media response', {
+                    'track': track, 
+                    'itag': media_item.get('itag'), 
+                    'status': r.status_code,
+                    'range': range_header,
+                    'content_type': content_type,
+                    'content_length': r.headers.get('content-length'),
+                    'content_range': r.headers.get('content-range')
+                })
+
+                # 返回 [status, content_type, content, headers] 格式
+                # 使用 r.iter_content 返回生成器，實現流式傳輸
+                return [
+                    r.status_code, 
+                    content_type, 
+                    r.iter_content(chunk_size=8192), 
+                    resp_headers
+                ]
+            else:
+                debug_log('proxy media bad status', {
+                    'status': r.status_code,
+                    'track': track,
+                    'url': target_url[:100]
+                })
+                return [r.status_code, 'text/plain', f'YouTube 服務器返回錯誤: {r.status_code}']
+
+        except Exception as e:
+            debug_log('proxy media error', repr(e))
+            return [500, 'text/plain', f'代理媒體失敗: {str(e)}']
+
+    def _normalize_category_id(self, cid):
+        raw = str(cid or '').strip()
+        return CATEGORY_ALIASES.get(raw, raw)
 
     def _normalize_filter_term(self, value):
         if isinstance(value, (list, tuple)):
@@ -1363,72 +2003,86 @@ class Spider(Spider):
             return ' '.join([self._normalize_filter_term(item) for item in value.values() if item])
         return re.sub(r'\s+', ' ', str(value or '')).strip()[:180]
 
+    def _build_category_keyword(self, cid, filters=None):
+        category_id = self._normalize_category_id(cid)
+        terms = []
+        base = CATEGORY_QUERY.get(category_id) or CATEGORY_QUERY.get(str(cid or '').strip()) or category_id or str(cid or '').strip()
+        if base:
+            terms.append(base)
+        if isinstance(filters, dict):
+            for value in filters.values():
+                term = self._normalize_filter_term(value)
+                if term:
+                    terms.append(term)
+        seen = set()
+        output = []
+        for term in terms:
+            term = term.strip()
+            if term and term not in seen:
+                seen.add(term)
+                output.append(term)
+        return ' '.join(output)
+
     def _search_cache_key(self, key):
         return re.sub(r'\s+', ' ', str(key or '')).strip().lower()
 
-    def _search_video_page(self, key, page=1):
+    def _search_youtube(self, key):
+        videos, _ = self._search_youtube_page(key, 1)
+        return videos
+
+    def _search_youtube_page(self, key, page=1, extra_params=None):
         page = max(1, int(page or 1))
         cache_key = self._search_cache_key(key)
+        if extra_params:
+            cache_key += '_' + urlencode(sorted(extra_params.items()))
         session = self.search_page_cache.get(cache_key)
         if page == 1 or not session:
-            session = self._fetch_search_first_page(key)
+            session = self._fetch_search_first_page(key, extra_params=extra_params)
             self.search_page_cache[cache_key] = session
+    
+        # 确保 pages 列表存在
+        if 'pages' not in session:
+            session['pages'] = []
+    
+        # 加载需要的页面
         while len(session.get('pages', [])) < page and session.get('next'):
+            debug_log('loading next page', {'current_pages': len(session.get('pages', [])), 'has_next': bool(session.get('next'))})
             data = self._fetch_search_continuation(session)
+            if not data:
+                debug_log('no continuation data', {})
+                session['next'] = None
+                break
             videos = self._extract_videos_from_api(data, 30)
             session.setdefault('pages', []).append(videos)
-            session['next'] = self._extract_continuation_token(data)
+            # 更新 next token
+            new_next = self._extract_continuation_token(data)
+            session['next'] = new_next
+            debug_log('page loaded', {'page_num': len(session['pages']), 'next_token': new_next[:20] if new_next else None})
+    
         pages = session.get('pages', [])
         videos = pages[page - 1] if len(pages) >= page else []
         has_more = bool(session.get('next')) or len(pages) > page
+        debug_log('search_youtube_page result', {'key': key, 'page': page, 'videos': len(videos), 'has_more': has_more, 'total_pages': len(pages)})
         return videos, has_more
 
-    def _search_live_page(self, key, page=1):
-        page = max(1, int(page or 1))
-        cache_key = f'live_{self._search_cache_key(key)}'
-        session = self.live_search_cache.get(cache_key)
-        if page == 1 or not session:
-            session = self._fetch_live_search_first_page(key)
-            self.live_search_cache[cache_key] = session
-        while len(session.get('pages', [])) < page and session.get('next'):
-            data = self._fetch_search_continuation(session)
-            videos = self._extract_live_videos_from_api(data, 30)
-            session.setdefault('pages', []).append(videos)
-            session['next'] = self._extract_continuation_token(data)
-        pages = session.get('pages', [])
-        videos = pages[page - 1] if len(pages) >= page else []
-        has_more = bool(session.get('next')) or len(pages) > page
-        return videos, has_more
-
-    def _fetch_live_search_first_page(self, key):
-        search_url = f'https://www.youtube.com/results?search_query={quote(str(key or ""))}&sp=EgJAAQ%253D%253D'
-        r = self.session.get(search_url, timeout=10)
-        html_str = r.text
-        data = self.yt_video._extract_json_after(html_str, 'ytInitialData') or {}
-        ytcfg = self.yt_video._extract_ytcfg(html_str) or {}
-        api_key = ytcfg.get('INNERTUBE_API_KEY') or self.yt_video._search(r'"INNERTUBE_API_KEY":"([^"]+)"', html_str)
-        context = ytcfg.get('INNERTUBE_CONTEXT') or {'client': {'clientName': 'WEB', 'clientVersion': '2.20240310.01.00', 'hl': 'zh-CN', 'gl': 'US'}}
-        client = context.get('client') or {}
-        return {
-            'key': key, 'api_key': api_key, 'context': context,
-            'client_name': client.get('clientName') or 'WEB',
-            'client_version': client.get('clientVersion') or '2.20240310.01.00',
-            'referer': search_url,
-            'pages': [self._extract_live_videos_from_api(data, 30)],
-            'next': self._extract_continuation_token(data),
-        }
-
-    def _fetch_search_first_page(self, key):
+    def _fetch_search_first_page(self, key, extra_params=None):
         search_url = f'https://www.youtube.com/results?search_query={quote(str(key or ""))}'
+        if extra_params:
+            search_url += '&' + urlencode(extra_params)
+        key_lower = str(key or '').lower()
+        if any(kw in key_lower for kw in ['直播', '即時影像', 'livecam', 'live cam', 'live camera', 'cctv', ' 4k live', '8k live', ' live']):
+            search_url += '&sp=EgJAAQ%3D%3D'
         r = self.session.get(search_url, timeout=10)
         html_str = r.text
-        data = self.yt_video._extract_json_after(html_str, 'ytInitialData') or {}
-        ytcfg = self.yt_video._extract_ytcfg(html_str) or {}
-        api_key = ytcfg.get('INNERTUBE_API_KEY') or self.yt_video._search(r'"INNERTUBE_API_KEY":"([^"]+)"', html_str)
+        data = self.yt._extract_json_after(html_str, 'ytInitialData') or {}
+        ytcfg = self.yt._extract_ytcfg(html_str) or {}
+        api_key = ytcfg.get('INNERTUBE_API_KEY') or self.yt._search(r'"INNERTUBE_API_KEY":"([^"]+)"', html_str)
         context = ytcfg.get('INNERTUBE_CONTEXT') or {'client': {'clientName': 'WEB', 'clientVersion': '2.20240310.01.00', 'hl': 'zh-CN', 'gl': 'US'}}
         client = context.get('client') or {}
         return {
-            'key': key, 'api_key': api_key, 'context': context,
+            'key': key,
+            'api_key': api_key,
+            'context': context,
             'client_name': client.get('clientName') or 'WEB',
             'client_version': client.get('clientVersion') or '2.20240310.01.00',
             'referer': search_url,
@@ -1440,6 +2094,7 @@ class Spider(Spider):
         token = session.get('next')
         api_key = session.get('api_key')
         if not token or not api_key:
+            debug_log('fetch continuation missing', {'has_token': bool(token), 'has_api_key': bool(api_key)})
             return {}
         url = f'https://www.youtube.com/youtubei/v1/search?key={quote(api_key)}'
         headers = self.header.copy()
@@ -1447,23 +2102,33 @@ class Spider(Spider):
             'Content-Type': 'application/json',
             'Origin': 'https://www.youtube.com',
             'Referer': session.get('referer') or 'https://www.youtube.com/',
-            'X-YouTube-Client-Name': '1',
+            'X-YouTube-Client-Name': str(self.yt._client_name_id(session.get('client_name'))),
             'X-YouTube-Client-Version': session.get('client_version') or '2.20240310.01.00',
         })
         payload = {'context': session.get('context') or {}, 'continuation': token}
-        r = self.session.post(url, json=payload, headers=headers, timeout=10)
-        r.raise_for_status()
-        return r.json()
+        debug_log('fetch continuation request', {'url': url, 'token': token[:20] + '...'})
+        try:
+            r = self.session.post(url, json=payload, headers=headers, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            debug_log('fetch continuation response', {'has_data': bool(data), 'keys': list(data.keys()) if data else []})
+            return data
+        except Exception as e:
+            debug_log('fetch continuation error', {'error': repr(e)})
+            return {}
 
     def _extract_continuation_token(self, data):
         tokens = []
         def scan(obj):
             if isinstance(obj, dict):
-                for key in ('continuationEndpoint', 'continuationItemRenderer'):
-                    if key in obj:
-                        token = obj[key].get('continuationCommand', {}).get('token')
-                        if token:
-                            tokens.append(token)
+                endpoint = obj.get('continuationEndpoint') or {}
+                token = endpoint.get('continuationCommand', {}).get('token')
+                if token:
+                    tokens.append(token)
+                renderer = obj.get('continuationItemRenderer') or {}
+                token = renderer.get('continuationEndpoint', {}).get('continuationCommand', {}).get('token')
+                if token:
+                    tokens.append(token)
                 for value in obj.values():
                     scan(value)
             elif isinstance(obj, list):
@@ -1472,6 +2137,18 @@ class Spider(Spider):
         scan(data)
         return tokens[0] if tokens else ''
 
+    def _extract_videos_fixed(self, html_str, limit=30):
+        data = None
+        match = re.search(r'var ytInitialData = (\{.*?\});', html_str)
+        if match:
+            try:
+                data = json.loads(match.group(1))
+            except Exception:
+                data = None
+        if not data:
+            return []
+        return self._extract_videos_from_api(data, limit)
+
     def _extract_videos_from_api(self, data, limit=30):
         videos = []
         seen = set()
@@ -1479,9 +2156,9 @@ class Spider(Spider):
             if len(videos) >= limit:
                 return
             if isinstance(obj, dict):
-                for key in ('videoRenderer', 'compactVideoRenderer', 'gridVideoRenderer'):
+                for key in ('videoRenderer', 'compactVideoRenderer', 'gridVideoRenderer', 'reelItemRenderer'):
                     if key in obj:
-                        item = self._parse_renderer(obj[key], is_live=False)
+                        item = self._parse_renderer(obj[key])
                         if item and item['vod_id'] not in seen:
                             seen.add(item['vod_id'])
                             videos.append(item)
@@ -1493,28 +2170,7 @@ class Spider(Spider):
         scan(data)
         return videos[:limit]
 
-    def _extract_live_videos_from_api(self, data, limit=30):
-        videos = []
-        seen = set()
-        def scan(obj):
-            if len(videos) >= limit:
-                return
-            if isinstance(obj, dict):
-                for key in ('videoRenderer', 'compactVideoRenderer', 'gridVideoRenderer'):
-                    if key in obj:
-                        item = self._parse_renderer(obj[key], is_live=True)
-                        if item and item['vod_id'] not in seen:
-                            seen.add(item['vod_id'])
-                            videos.append(item)
-                for value in obj.values():
-                    scan(value)
-            elif isinstance(obj, list):
-                for value in obj:
-                    scan(value)
-        scan(data)
-        return videos[:limit]
-
-    def _parse_renderer(self, renderer, is_live=False):
+    def _parse_renderer(self, renderer):
         try:
             vid = renderer.get('videoId')
             if not vid:
@@ -1524,13 +2180,54 @@ class Spider(Spider):
                 return None
             title_obj = renderer.get('title') or renderer.get('headline') or {}
             title = title_obj.get('simpleText') or ''.join([x.get('text', '') for x in title_obj.get('runs', [])]) or 'YouTube Video'
-            dur = (renderer.get('lengthText') or {}).get('simpleText') or ''
-            remarks = '直播' if is_live else (dur if dur else '视频')
+            
+            # 判斷是否為真實直播 (Live)
+            is_live = False
+            
+            # 1. 檢查 badges (如 LIVE / 直播)
+            badges = renderer.get('badges') or []
+            for b in badges:
+                b_ren = b.get('metadataBadgeRenderer') or {}
+                label = str(b_ren.get('label') or '').upper()
+                if 'LIVE' in label or '直播' in label:
+                    is_live = True
+                    break
+            
+            # 2. 檢查 thumbnailOverlays
+            if not is_live:
+                overlays = renderer.get('thumbnailOverlays') or []
+                for ov in overlays:
+                    time_status = ov.get('thumbnailOverlayTimeStatusRenderer') or {}
+                    if time_status.get('style') == 'LIVE':
+                        is_live = True
+                        break
+                    text_runs = (time_status.get('text') or {}).get('runs') or []
+                    for r in text_runs:
+                        txt = str(r.get('text') or '').upper()
+                        if 'LIVE' in txt or '直播' in txt:
+                            is_live = True
+                            break
+            
+            # 3. 檢查 viewCountText (如 "1,234 人正在觀看" / "watching now")
+            if not is_live:
+                view_text_obj = renderer.get('viewCountText') or {}
+                view_str = view_text_obj.get('simpleText') or ''.join([x.get('text', '') for x in view_text_obj.get('runs', [])])
+                if '正在觀看' in view_str or 'watching' in view_str.lower():
+                    is_live = True
+
+            dur = (renderer.get('lengthText') or {}).get('simpleText')
+            
+            if is_live:
+                dur = '🔴 4K 直播中' if '4K' in title.upper() else '🔴 直播中'
+            elif not dur:
+                dur = 'YouTube'
+
             return {
                 'vod_id': vid,
                 'vod_name': html.unescape(title),
-                'vod_pic': f'http://127.0.0.1:9978/proxy?do=py&type=image&vid={vid}',
-                'vod_remarks': remarks
+                'vod_pic': f'https://img.youtube.com/vi/{vid}/hqdefault.jpg',
+                'vod_remarks': dur,
+                'is_live': is_live
             }
         except Exception:
             return None
@@ -1547,865 +2244,18 @@ class Spider(Spider):
             return 'video'
         return re.sub(r'[#$@%&!?*|\\/:<>]', ' ', title)[:60]
 
-    def _get_quality_label(self, height):
-        if height >= 2160: return '4K'
-        elif height >= 1440: return '2K'
-        elif height >= 1080: return '1080P'
-        elif height >= 720: return '720P'
-        elif height >= 480: return '480P'
-        elif height >= 360: return '360P'
-        else: return f'{height}P'
-
-    # ========== detailContent ==========
-    def detailContent(self, did):
-        video_id = did[0]
-        try:
-            live_data = self.yt_live.extract_live(video_id)
-            is_live = live_data.get('is_live') or bool(live_data.get('hls_url'))
-            title = live_data.get('title') or video_id
-            status = '直播中' if is_live else '未开播'
-        except Exception as e:
-            is_live = False
-            title = self._get_video_title(video_id) or video_id
-            status = '视频'
-
-        play_sources = []
-        play_urls = []
-
-        if is_live:
-            hls_url = live_data.get('hls_url')
-            if hls_url:
-                variants = self._parse_hls_master(hls_url)
-                if variants:
-                    for v in variants:
-                        height = v['height']
-                        label = self._get_quality_label(height)
-                        cache_key = f'live_{video_id}_{height}'
-                        self.setCache(cache_key, {'url': v['url'], 'expires': time.time() + 300})
-                        play_sources.append(label)
-                        play_urls.append(f'{label}${video_id}@live_{height}')
-                else:
-                    play_sources.append('直播')
-                    play_urls.append(f'直播${video_id}@live')
-            else:
-                play_sources.append('直播')
-                play_urls.append(f'直播${video_id}@live')
-        else:
-            try:
-                data = self.yt_video.extract(video_id)
-                formats = data.get('formats', [])
-                video_streams = [f for f in formats if f.get('vcodec') != 'none' and f.get('acodec') == 'none']
-                height_groups = {}
-                for f in video_streams:
-                    h = int(f.get('height', 0))
-                    if h <= 0: continue
-                    height_groups.setdefault(h, []).append(f)
-                for h in sorted(height_groups.keys(), reverse=True):
-                    items = height_groups[h]
-                    sdr_items = [x for x in items if not self.yt_video._is_hdr_video(x)]
-                    hdr_items = [x for x in items if self.yt_video._is_hdr_video(x)]
-                    sdr_item = max(sdr_items, key=lambda x: int(x.get('bitrate') or 0)) if sdr_items else None
-                    hdr_item = max(hdr_items, key=lambda x: int(x.get('bitrate') or 0)) if hdr_items else None
-                    label_base = self._get_quality_label(h)
-                    if sdr_item:
-                        play_sources.append(f'{label_base} SDR')
-                        play_urls.append(f'{label_base} SDR${video_id}@{h}_sdr')
-                    if hdr_item:
-                        play_sources.append(f'{label_base} HDR')
-                        play_urls.append(f'{label_base} HDR${video_id}@{h}_hdr')
-                if not play_sources:
-                    raise Exception('No video streams found')
-            except Exception as e:
-                debug_log('detail get formats error', {'video_id': video_id, 'error': repr(e)})
-                play_sources.append('最高画质')
-                play_urls.append(f'最高画质${video_id}@best')
-
-        related = []
-        try:
-            r = self.session.get(f'https://www.youtube.com/watch?v={video_id}', timeout=10)
-            related = self._extract_videos_from_api(
-                self.yt_video._extract_json_after(r.text, 'ytInitialData') or {}, 20
-            )
-        except Exception:
-            pass
-
-        if related:
-            related_urls = []
-            for v in related:
-                if v.get('vod_id') != video_id:
-                    related_urls.append(f"{self._safe_title(v['vod_name'])}${v['vod_id']}@best")
-            if related_urls:
-                play_sources.append('相关推荐')
-                play_urls.append('#'.join(related_urls))
-
-        vod = {
-            'vod_id': video_id,
-            'vod_name': title,
-            'vod_pic': f'http://127.0.0.1:9978/proxy?do=py&type=image&vid={video_id}',
-            'vod_remarks': status,
-            'vod_play_from': '$$$'.join(play_sources),
-            'vod_play_url': '$$$'.join(play_urls)
-        }
-        return {'list': [vod]}
-
-    # ========== playerContent ==========
-    def playerContent(self, flag, pid, vipFlags):
-        raw_pid = pid.split('$')[-1]
-        if '@' in raw_pid:
-            video_id, quality_or_type = raw_pid.rsplit('@', 1)
-        else:
-            video_id, quality_or_type = raw_pid, 'best'
-
-        if quality_or_type == 'live':
-            return self._play_live(video_id)
-        elif quality_or_type.startswith('live_'):
-            height_str = quality_or_type.split('_')[1]
-            if height_str.isdigit():
-                return self._play_live_by_height(video_id, int(height_str))
-            else:
-                return self._play_live(video_id)
-        else:
-            if quality_or_type.endswith('_sdr') or quality_or_type.endswith('_hdr'):
-                parts = quality_or_type.rsplit('_', 1)
-                if len(parts) == 2 and parts[1] in ('sdr', 'hdr'):
-                    height_str, hdr_flag = parts
-                    if height_str.isdigit():
-                        return self._play_video_by_height_and_type(video_id, int(height_str), hdr_flag)
-            if quality_or_type.isdigit():
-                return self._play_video_by_height_and_type(video_id, int(quality_or_type), 'sdr')
-            else:
-                quality = quality_or_type if quality_or_type in ('best', '4k', '2k', '1080p') else 'best'
-                return self._play_video(video_id, quality)
-
-    def _play_headers_for_item(self, item):
-        h = {}
-        try:
-            h.update(self.header or {})
-        except Exception:
-            pass
-        item_h = (item or {}).get('headers') or {}
-        h.update(item_h)
-        ua = item_h.get('User-Agent') or (item or {}).get('_client_ua')
-        if not ua:
-            client = (item or {}).get('client') or ''
-            if client == 'ANDROID_VR':
-                ua = 'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip'
-            elif client in ('WEB_EMBEDDED_PLAYER', 'WEB_EMBEDDED'):
-                ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-            elif client in ('TVHTML5_SIMPLY_EMBEDDED_PLAYER', 'TVHTML5'):
-                ua = 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version'
-        if ua:
-            h['User-Agent'] = ua
-        h['Accept'] = '*/*'
-        h['Accept-Encoding'] = 'identity'
-        h.pop('Origin', None)
-        if (item or {}).get('client') in ('ANDROID_VR', 'ANDROID', 'IOS', 'WEB_EMBEDDED_PLAYER', 'TVHTML5_SIMPLY_EMBEDDED_PLAYER'):
-            h.pop('Referer', None)
-        return h
-
-    def _play_video_by_height_and_type(self, video_id, target_height, hdr_type):
-        try:
-            data = self.yt_video.extract(video_id)
-            formats = data.get('formats', []) or []
-
-            # HLS 优先
-            hls_url = data.get('hls_url') or ''
-            if hls_url:
-                try:
-                    if getattr(self, 'hls_proxy_enabled', True):
-                        play_url = self._cache_hls_url(hls_url, video_id, 'master')
-                    else:
-                        play_url = hls_url
-                    return {
-                        'parse': 0, 'jx': 0,
-                        'url': play_url,
-                        'header': self.header,
-                        'format': 'application/x-mpegURL',
-                    }
-                except Exception:
-                    pass
-
-            client_order = {
-                'ANDROID_VR': 0, 'WEB_EMBEDDED_PLAYER': 1,
-                'TVHTML5_SIMPLY_EMBEDDED_PLAYER': 2, 'WEB': 3,
-                'ANDROID': 8, 'IOS': 9, 'MWEB': 10,
-            }
-
-            def _is_progressive(f):
-                if not f or not f.get('url'):
-                    return False
-                vc, ac = f.get('vcodec'), f.get('acodec')
-                if vc not in (None, '', 'none') and ac not in (None, '', 'none'):
-                    return True
-                return False
-
-            # progressive 直链
-            progressive = [f for f in formats if _is_progressive(f)]
-            min_accept = 720 if int(target_height) >= 720 else max(360, int(target_height) - 120)
-            prog_ok = [f for f in progressive if int(f.get('height') or 0) >= min_accept]
-            if prog_ok:
-                prog_ok.sort(key=lambda x: (
-                    int(x.get('height') or 0),
-                    -client_order.get(x.get('client') or '', 9),
-                    int(x.get('bitrate') or 0),
-                ), reverse=True)
-                selected = prog_ok[0]
-                return {
-                    'parse': 0, 'jx': 0,
-                    'url': selected['url'],
-                    'header': self._play_headers_for_item(selected),
-                }
-
-            # DASH 分离流
-            video_streams = [
-                f for f in formats
-                if f.get('vcodec') not in (None, '', 'none') and f.get('acodec') in (None, '', 'none')
-            ]
-            is_hdr_wanted = (hdr_type == 'hdr')
-            hdr_candidates = [f for f in video_streams if self.yt_video._is_hdr_video(f) == is_hdr_wanted]
-            candidates = hdr_candidates if hdr_candidates else video_streams
-
-            height_groups = {}
-            for f in candidates:
-                h = int(f.get('height') or 0)
-                if h > 0:
-                    height_groups.setdefault(h, []).append(f)
-
-            available_heights = sorted(height_groups.keys(), reverse=True)
-            selected_height = None
-            if target_height in height_groups:
-                selected_height = target_height
-            else:
-                lower = [h for h in available_heights if h <= target_height]
-                if lower:
-                    selected_height = max(lower)
-                elif available_heights:
-                    selected_height = min(available_heights)
-
-            if not selected_height or selected_height not in height_groups:
-                return {
-                    'parse': 1, 'jx': 0,
-                    'url': f'https://www.youtube.com/watch?v={video_id}',
-                    'header': self.header,
-                }
-
-            final_candidates = height_groups[selected_height]
-            final_candidates.sort(key=lambda x: (
-                client_order.get(x.get('client') or '', 9),
-                -(int(x.get('bitrate') or 0)),
-            ))
-            selected_video = final_candidates[0]
-            preferred_client = selected_video.get('client') or ''
-
-            audio_candidates = [
-                f for f in formats
-                if f.get('acodec') not in (None, '', 'none') and f.get('vcodec') in (None, '', 'none')
-            ]
-            same_client_audio = [f for f in audio_candidates if f.get('client') == preferred_client]
-            pool = same_client_audio if same_client_audio else audio_candidates
-            pool.sort(key=lambda x: (
-                client_order.get(x.get('client') or '', 9),
-                -(int(x.get('bitrate') or 0)),
-            ))
-            audio = pool[0] if pool else None
-
-            cache_key = f'yt_{video_id}_{target_height}_{hdr_type}'
-            if audio:
-                self.setCache(cache_key, {
-                    'video_tracks': [selected_video],
-                    'video_url': selected_video['url'],
-                    'audio_url': audio['url'],
-                    'video_item': selected_video,
-                    'audio_item': audio,
-                    'all_formats': formats,
-                    'duration': data.get('duration') or 0,
-                    'expires': time.time() + 3600,
-                    'mode': 'dash',
-                })
-                return {
-                    'parse': 0, 'jx': 0,
-                    'url': f'http://127.0.0.1:9978/proxy?do=py&type=mpd&vid={video_id}&quality={target_height}_{hdr_type}',
-                    'format': 'application/dash+xml',
-                }
-            return {
-                'parse': 0, 'jx': 0,
-                'url': selected_video['url'],
-                'header': self._play_headers_for_item(selected_video),
-            }
-        except Exception as e:
-            debug_log('_play_video_by_height_and_type error', {
-                'video_id': video_id, 'height': target_height, 'type': hdr_type, 'error': repr(e),
-            })
-            return {
-                'parse': 1, 'jx': 0,
-                'url': f'https://www.youtube.com/watch?v={video_id}',
-                'header': self.header,
-            }
-
-    def _play_live_by_height(self, video_id, target_height):
-        cache_key = f'live_{video_id}_{target_height}'
-        cached = self.getCache(cache_key)
-        if cached and cached.get('url'):
-            variant_url = cached['url']
-            if self.hls_proxy_enabled:
-                play_url = self._cache_hls_url(variant_url, video_id, 'master')
-            else:
-                play_url = variant_url
-            return {
-                'parse': 0, 'jx': 0,
-                'url': play_url,
-                'header': self.header,
-                'format': 'application/x-mpegURL'
-            }
-        else:
-            return self._play_live(video_id)
-
-    def _play_live(self, video_id):
-        try:
-            data = self.yt_live.extract_live(video_id)
-            hls_url = data.get('hls_url') or ''
-            if not hls_url:
-                raise Exception(data.get('reason') or '未获取到直播 HLS 地址')
-            play_url = hls_url
-            if self.hls_proxy_enabled:
-                play_url = self._cache_hls_url(hls_url, video_id, 'master')
-            return {
-                'parse': 0, 'jx': 0,
-                'url': play_url,
-                'header': self.header,
-                'format': 'application/x-mpegURL'
-            }
-        except Exception as e:
-            debug_log('_play_live error', {'video_id': video_id, 'error': repr(e)})
-            return {'parse': 1, 'jx': 1, 'url': f'https://www.youtube.com/embed/{video_id}?autoplay=1'}
-
-    def _play_video(self, video_id, quality):
-        try:
-            data = self.yt_video.extract(video_id)
-            formats = data.get('formats') or []
-
-            # HLS 优先
-            hls_url = data.get('hls_url') or ''
-            if hls_url:
-                try:
-                    play_url = self._cache_hls_url(hls_url, video_id, 'master') if getattr(self, 'hls_proxy_enabled', True) else hls_url
-                    return {
-                        'parse': 0, 'jx': 0,
-                        'url': play_url,
-                        'header': self.header,
-                        'format': 'application/x-mpegURL',
-                    }
-                except Exception:
-                    pass
-
-            progressive = [
-                f for f in formats
-                if f.get('url') and f.get('vcodec') not in (None, '', 'none')
-                and f.get('acodec') not in (None, '', 'none')
-            ]
-            if quality == '4k':
-                prog = [f for f in progressive if int(f.get('height') or 0) >= 1440] or progressive
-            elif quality == '2k':
-                prog = [f for f in progressive if int(f.get('height') or 0) >= 1080] or progressive
-            elif quality == '1080p':
-                prog = [f for f in progressive if int(f.get('height') or 0) >= 720] or []
-            else:
-                prog = [f for f in progressive if int(f.get('height') or 0) >= 720] or progressive
-
-            if prog:
-                prog.sort(key=lambda x: (int(x.get('height') or 0), int(x.get('bitrate') or 0)), reverse=True)
-                playable = prog[0]
-                return {
-                    'parse': 0, 'jx': 0,
-                    'url': playable['url'],
-                    'header': self._play_headers_for_item(playable),
-                }
-
-            playable = self.yt_video.choose_playable(formats, quality)
-            if playable:
-                audio = self.yt_video.choose_audio(formats)
-                cache_key = f'yt_{video_id}_{quality}'
-                if audio and (playable.get('acodec') in (None, '', 'none')):
-                    self.setCache(cache_key, {
-                        'video_url': playable['url'],
-                        'audio_url': audio['url'],
-                        'video_item': playable,
-                        'audio_item': audio,
-                        'duration': data.get('duration') or 0,
-                        'expires': time.time() + 3600,
-                        'mode': 'dash',
-                    })
-                    return {
-                        'parse': 0, 'jx': 0,
-                        'url': f'http://127.0.0.1:9978/proxy?do=py&type=mpd&vid={video_id}&quality={quality}',
-                        'format': 'application/dash+xml',
-                    }
-                return {
-                    'parse': 0, 'jx': 0,
-                    'url': playable['url'],
-                    'header': self._play_headers_for_item(playable),
-                }
-            raise Exception(f'没有可直接播放的 {quality} 视频流格式')
-        except Exception as e:
-            debug_log('_play_video error', repr(e))
-            return {
-                'parse': 1, 'jx': 0,
-                'url': f'https://www.youtube.com/watch?v={video_id}',
-                'header': self.header,
-            }
-
-    def _parse_hls_master(self, master_url):
-        try:
-            r = self.session.get(master_url, headers=self.header, timeout=10)
-            r.raise_for_status()
-            lines = r.text.splitlines()
-            variants = []
-            i = 0
-            while i < len(lines):
-                line = lines[i].strip()
-                if line.startswith('#EXT-X-STREAM-INF'):
-                    bandwidth = re.search(r'BANDWIDTH=(\d+)', line)
-                    resolution = re.search(r'RESOLUTION=(\d+)x(\d+)', line)
-                    height = int(resolution.group(2)) if resolution else 0
-                    width = int(resolution.group(1)) if resolution else 0
-                    bw = int(bandwidth.group(1)) if bandwidth else 0
-                    if i + 1 < len(lines):
-                        url_line = lines[i+1].strip()
-                        if not url_line.startswith('#'):
-                            full_url = urljoin(master_url, url_line)
-                            variants.append({
-                                'height': height, 'width': width,
-                                'bandwidth': bw, 'url': full_url
-                            })
-                    i += 2
-                else:
-                    i += 1
-            variants.sort(key=lambda x: x['height'], reverse=True)
-            return variants
-        except Exception as e:
-            debug_log('parse hls master error', {'master_url': master_url, 'error': repr(e)})
-            return []
-
-    # ========== 本地代理（保持原样） ==========
-    def localProxy(self, params):
-        if params.get('do') != 'py':
-            return None
-        typ = params.get('type')
-        if typ == 'mpd':
-            return self._proxy_mpd(params)
-        if typ == 'media':
-            return self._proxy_media(params)
-        if typ == 'single':
-            return self._proxy_single(params)
-        if typ == 'image':
-            return self._proxy_image(params)
-        if typ == 'hls':
-            return self._proxy_hls(params)
-        return None
-
-    def _cdn_get(self, url, headers=None, stream=False, timeout=15, **kwargs):
-        req_headers = {}
-        if headers:
-            req_headers.update(headers)
-        proxies = getattr(self.session, 'proxies', None) or {}
-        return requests.get(
-            url, headers=req_headers, stream=stream,
-            timeout=timeout, proxies=proxies, cookies={}, **kwargs
-        )
-
-    def _proxy_image(self, params):
-        vid = params.get('vid')
-        if not vid:
-            return [400, 'text/plain', '缺少 video id']
-        for quality in ['maxresdefault.jpg', 'hqdefault.jpg', 'mqdefault.jpg', 'sddefault.jpg', 'default.jpg']:
-            img_url = f'https://img.youtube.com/vi/{vid}/{quality}'
-            try:
-                r = self._cdn_get(img_url, headers={'User-Agent': self.header.get('User-Agent', '')}, timeout=10)
-                if r.status_code == 200 and len(r.content) > 1000:
-                    content_type = r.headers.get('content-type', 'image/jpeg')
-                    return [200, content_type, r.content, {'Cache-Control': 'max-age=86400'}]
-            except Exception:
-                continue
-        return [404, 'text/plain', '图片获取失败']
-
-    def _proxy_single(self, params):
-        vid = params.get('vid')
-        quality = params.get('quality') or 'best'
-        data = self.getCache(f'yt_{vid}_{quality}') if vid else None
-        if not data:
-            return [404, 'text/plain', '播放缓存已过期或不存在']
-        target_url = data.get('video_url')
-        media_item = data.get('video_item') or {}
-        if not target_url:
-            return [404, 'text/plain', '播放地址不存在']
-
-        pinned_client = media_item.get('client') or 'ANDROID_VR'
-        pinned_itag = media_item.get('itag')
-
-        def pick_url(fresh_data, client_name):
-            formats = (fresh_data or {}).get('formats') or []
-            progressive = [
-                f for f in formats
-                if f.get('url') and f.get('vcodec') not in (None, '', 'none')
-                and f.get('acodec') not in (None, '', 'none')
-            ]
-            if pinned_itag is not None:
-                for f in progressive:
-                    if f.get('client') == client_name and f.get('itag') == pinned_itag:
-                        return f.get('url'), f
-                for f in progressive:
-                    if f.get('itag') == pinned_itag:
-                        return f.get('url'), f
-            if progressive:
-                progressive.sort(key=lambda x: int(x.get('height') or 0), reverse=True)
-                same = [f for f in progressive if f.get('client') == client_name]
-                chosen = same[0] if same else progressive[0]
-                return chosen.get('url'), chosen
-            return None, None
-
-        try:
-            cur_exp = self._get_url_expire(target_url)
-            now_ts = time.time()
-            if cur_exp > 0 and cur_exp - now_ts < 60:
-                fresh = self._fresh_media_data(vid, current_url=target_url, prefer_client=pinned_client)
-                new_url, new_item = pick_url(fresh, pinned_client)
-                if new_url:
-                    target_url = new_url
-                    media_item = new_item
-                    data['video_url'] = target_url
-                    data['video_item'] = media_item
-                    self.setCache(f'yt_{vid}_{quality}', data)
-        except Exception as e:
-            debug_log('proxy_single soft refresh failed', {'vid': vid, 'error': repr(e)})
-
-        def build_headers(item):
-            return self._play_headers_for_item(item)
-
-        range_header = params.get('range') or params.get('Range')
-        headers = build_headers(media_item)
-        if range_header:
-            headers['Range'] = range_header
-
-        last_error = None
-        clients_to_try = [pinned_client]
-        for c in ('ANDROID_VR', 'WEB_EMBEDDED', 'TVHTML5'):
-            if c not in clients_to_try:
-                clients_to_try.append(c)
-
-        first_attempt = True
-        for client_try in clients_to_try:
-            for same_client_round in range(2):
-                try:
-                    if not first_attempt:
-                        allow = self._can_force_refresh(vid, force_first=(same_client_round == 0 and client_try == pinned_client))
-                        if not allow:
-                            time.sleep(0.3)
-                        else:
-                            self.media_fresh_cache.pop(vid, None)
-                            fresh = self._fresh_media_data(vid, ttl=0, force=True, prefer_client=client_try)
-                            new_url, new_item = pick_url(fresh, client_try)
-                            if new_url:
-                                target_url = new_url
-                                media_item = new_item
-                                headers = build_headers(media_item)
-                                if range_header:
-                                    headers['Range'] = range_header
-                            else:
-                                break
-
-                    first_attempt = False
-                    r = self._cdn_get(target_url, headers=headers, stream=True, timeout=45)
-                    content_type = r.headers.get('content-type', 'video/mp4')
-                    resp_headers = {
-                        'Content-Type': content_type,
-                        'Accept-Ranges': 'bytes',
-                        'Cache-Control': 'no-cache',
-                    }
-                    if r.headers.get('content-range'):
-                        resp_headers['Content-Range'] = r.headers.get('content-range')
-                    if r.headers.get('content-length'):
-                        resp_headers['Content-Length'] = r.headers.get('content-length')
-
-                    if r.status_code in (403, 404):
-                        r.close()
-                        time.sleep(0.2)
-                        continue
-                    if r.status_code in (200, 206):
-                        data['video_url'] = target_url
-                        data['video_item'] = media_item
-                        self.setCache(f'yt_{vid}_{quality}', data)
-                    return [r.status_code, content_type, r.content, resp_headers]
-                except Exception as e:
-                    last_error = e
-                    time.sleep(0.2)
-                    continue
-            pinned_client = client_try
-        return [500, 'text/plain', f'代理播放失败: {str(last_error)}']
-
-    def _proxy_mpd(self, params):
-        vid = params.get('vid')
-        quality = params.get('quality') or '1080p'
-        data = self.getCache(f'yt_{vid}_{quality}') if vid else None
-        if not data:
-            return [404, 'text/plain', '视频缓存已过期或不存在']
-        video_url = data.get('video_url')
-        audio_url = data.get('audio_url')
-        duration = data.get('duration') or 0
-        video_item = data.get('video_item') or {}
-        audio_item = data.get('audio_item') or {}
-        media_base = f'http://127.0.0.1:9978/proxy?do=py&type=media&vid={vid}&quality={quality}'
-        duration_pt = f"PT{int(duration or 0)}S"
-        video_mime = (video_item.get('mimeType') or 'video/webm').split(';')[0]
-        audio_mime = (audio_item.get('mimeType') or 'audio/mp4').split(';')[0]
-        video_init = video_item.get('initRange') or {}
-        video_index = video_item.get('indexRange') or {}
-        audio_init = audio_item.get('initRange') or {}
-        audio_index = audio_item.get('indexRange') or {}
-        mpd = f'''<?xml version="1.0" encoding="UTF-8"?>
-<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="{duration_pt}" minBufferTime="PT1.5S" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
-  <Period id="1" start="PT0S">
-    <AdaptationSet mimeType="{html.escape(video_mime)}" startWithSAP="1" segmentAlignment="true" scanType="progressive">
-      <Representation id="v{video_item.get('itag', 1)}" bandwidth="{video_item.get('bitrate', 1000000)}" codecs="{html.escape(video_item.get('codecs') or '')}" height="{video_item.get('height', 0)}" width="{video_item.get('width', 0)}">
-        <BaseURL>{html.escape(media_base + '&track=video')}</BaseURL>
-        <SegmentBase indexRange="{video_index.get('start', '0')}-{video_index.get('end', '0')}"><Initialization range="{video_init.get('start', '0')}-{video_init.get('end', '0')}"/></SegmentBase>
-      </Representation>
-    </AdaptationSet>
-'''
-        if audio_url:
-            mpd += f'''    <AdaptationSet mimeType="{html.escape(audio_mime)}" startWithSAP="1" segmentAlignment="true" lang="und">
-      <Representation id="a{audio_item.get('itag', 1)}" bandwidth="{audio_item.get('bitrate', 128000)}" codecs="{html.escape(audio_item.get('codecs') or '')}" audioSamplingRate="44100">
-        <BaseURL>{html.escape(media_base + '&track=audio')}</BaseURL>
-        <SegmentBase indexRange="{audio_index.get('start', '0')}-{audio_index.get('end', '0')}"><Initialization range="{audio_init.get('start', '0')}-{audio_init.get('end', '0')}"/></SegmentBase>
-      </Representation>
-    </AdaptationSet>
-'''
-        mpd += '  </Period>\n</MPD>'
-        return [200, 'application/dash+xml', mpd]
-
-    def _proxy_media(self, params):
-        vid = params.get('vid')
-        quality = params.get('quality') or '1080p'
-        track = params.get('track')
-        data = self.getCache(f'yt_{vid}_{quality}') if vid else None
-        if not data or track not in ('video', 'audio'):
-            return [404, 'text/plain', '媒体不存在']
-        cached_item = data.get('video_item') if track == 'video' else data.get('audio_item')
-        pinned_client = (cached_item or {}).get('client') or 'ANDROID_VR'
-        pinned_itag = (cached_item or {}).get('itag')
-        pinned_height = int((cached_item or {}).get('height') or 0)
-
-        def pick_url(fresh_data, client_name, itag=None, height=0):
-            formats = (fresh_data or {}).get('formats') or []
-            if track == 'video':
-                pool = [f for f in formats if f.get('vcodec') != 'none' and f.get('acodec') == 'none' and f.get('url')]
-            else:
-                pool = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none' and f.get('url')]
-            if not pool:
-                return None, None
-            if itag is not None and client_name:
-                for f in pool:
-                    if f.get('client') == client_name and f.get('itag') == itag:
-                        return f.get('url'), f
-            if client_name:
-                same = [f for f in pool if f.get('client') == client_name]
-                if height > 0 and track == 'video':
-                    same_h = [f for f in same if int(f.get('height') or 0) == height]
-                    if same_h:
-                        chosen = max(same_h, key=lambda x: int(x.get('bitrate') or 0))
-                        return chosen.get('url'), chosen
-                if same:
-                    chosen = max(same, key=lambda x: int(x.get('bitrate') or 0))
-                    return chosen.get('url'), chosen
-            if itag is not None:
-                for f in pool:
-                    if f.get('itag') == itag:
-                        return f.get('url'), f
-            chosen = max(pool, key=lambda x: int(x.get('bitrate') or 0))
-            return chosen.get('url'), chosen
-
-        target_url = data.get('video_url') if track == 'video' else data.get('audio_url')
-        media_item = cached_item
-        try:
-            cur_exp = self._get_url_expire(target_url or '')
-            now_ts = time.time()
-            if target_url and cur_exp > 0 and cur_exp - now_ts < 60:
-                fresh = self._fresh_media_data(vid, current_url=target_url, prefer_client=pinned_client)
-                new_url, new_item = pick_url(fresh, pinned_client, pinned_itag, pinned_height)
-                if new_url:
-                    target_url = new_url
-                    media_item = new_item
-                    if track == 'video':
-                        data['video_url'] = target_url
-                        data['video_item'] = media_item
-                    else:
-                        data['audio_url'] = target_url
-                        data['audio_item'] = media_item
-                    self.setCache(f'yt_{vid}_{quality}', data)
-        except Exception as e:
-            debug_log('proxy_media soft refresh failed', {'vid': vid, 'error': repr(e)})
-
-        if not target_url:
-            return [404, 'text/plain', f'{track} 流不存在']
-
-        def build_headers(item):
-            h = self._play_headers_for_item(item)
-            return h
-
-        range_header = params.get('range') or params.get('Range')
-        headers = build_headers(media_item)
-        if range_header:
-            headers['Range'] = range_header
-
-        last_error = None
-        clients_to_try = [pinned_client]
-        for c in ('ANDROID_VR', 'WEB_EMBEDDED', 'TVHTML5'):
-            if c not in clients_to_try:
-                clients_to_try.append(c)
-
-        for client_try in clients_to_try:
-            for same_client_round in range(2):
-                try:
-                    if client_try != pinned_client or same_client_round > 0:
-                        if not self._can_force_refresh(vid):
-                            time.sleep(0.5)
-                        else:
-                            self.media_fresh_cache.pop(vid, None)
-                            fresh = self._fresh_media_data(vid, ttl=0, force=True, prefer_client=client_try)
-                            new_url, new_item = pick_url(fresh, client_try, pinned_itag, pinned_height)
-                            if not new_url:
-                                break
-                            target_url = new_url
-                            media_item = new_item
-                            headers = build_headers(media_item)
-                            if range_header:
-                                headers['Range'] = range_header
-
-                    r = self._cdn_get(target_url, headers=headers, stream=True, timeout=45)
-                    content_type = r.headers.get('content-type', 'application/octet-stream')
-                    resp_headers = {
-                        'Content-Type': content_type,
-                        'Accept-Ranges': 'bytes',
-                        'Cache-Control': 'no-cache',
-                    }
-                    if r.headers.get('content-range'):
-                        resp_headers['Content-Range'] = r.headers.get('content-range')
-                    if r.headers.get('content-length'):
-                        resp_headers['Content-Length'] = r.headers.get('content-length')
-
-                    if r.status_code in (403, 404):
-                        r.close()
-                        continue
-
-                    if r.status_code in (200, 206):
-                        if track == 'video':
-                            data['video_url'] = target_url
-                            data['video_item'] = media_item
-                        else:
-                            data['audio_url'] = target_url
-                            data['audio_item'] = media_item
-                        self.setCache(f'yt_{vid}_{quality}', data)
-                    return [r.status_code, content_type, r.content, resp_headers]
-                except Exception as e:
-                    last_error = e
-                    time.sleep(0.2)
-                    continue
-            pinned_client = client_try
-
-        return [500, 'text/plain', f'代理媒体失败: {str(last_error)}']
-
-    # ========== HLS 代理 ==========
-    HLS_TTL = {'master': 6 * 3600, 'playlist': 6 * 3600, 'media': 120, 'media_retry': 120}
-
-    def _hls_ttl(self, kind):
-        return self.HLS_TTL.get(kind, 180)
-
-    def _prune_hls_cache(self):
-        now = time.time()
-        expired = [k for k, v in self.hls_url_cache.items() if v.get('expires', 0) < now]
-        for k in expired:
-            self.hls_url_cache.pop(k, None)
-
-    def _cache_hls_url(self, target_url, video_id='', kind='media'):
-        self._prune_hls_cache()
-        self._hls_key_seq += 1
-        key = f'{int(time.time() * 1000)}_{self._hls_key_seq}'
-        self.hls_url_cache[key] = {
-            'url': target_url,
-            'video_id': video_id,
-            'kind': kind,
-            'expires': time.time() + self._hls_ttl(kind),
-        }
-        return f'http://127.0.0.1:9978/proxy?do=py&type=hls&key={quote(key)}'
-
-    def _hls_headers(self, target_url, kind=None):
-        if kind == 'media_retry':
-            return {
-                'User-Agent': 'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
-                'Accept': '*/*',
-            }
-        headers = self.header.copy()
-        headers['Accept'] = '*/*'
-        if kind in ('master', 'playlist'):
-            headers['Origin'] = 'https://www.youtube.com'
-            headers['Referer'] = 'https://www.youtube.com/'
-        elif kind == 'media':
-            headers['User-Agent'] = 'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip'
-            headers.pop('Origin', None)
-            headers.pop('Referer', None)
-        return headers
-
-    def _rewrite_m3u8(self, text, base_url, video_id=''):
-        output = []
-        for line in (text or '').splitlines():
-            stripped = line.strip()
-            if not stripped:
-                output.append(line)
-                continue
-            if stripped.startswith('#'):
-                output.append(self._rewrite_m3u8_tag(line, base_url, video_id))
-                continue
-            absolute = urljoin(base_url, stripped)
-            kind = 'playlist' if stripped.endswith('.m3u8') or '/hls_playlist/' in stripped else 'media'
-            output.append(self._cache_hls_url(absolute, video_id, kind))
-        return '\n'.join(output) + '\n'
-
-    def _rewrite_m3u8_tag(self, line, base_url, video_id=''):
-        def replace_uri(match):
-            raw_url = match.group(1)
-            absolute = urljoin(base_url, raw_url)
-            proxied = self._cache_hls_url(absolute, video_id, 'media')
-            return f'URI="{proxied}"'
-        return re.sub(r'URI="([^"]+)"', replace_uri, line)
-
-    def _proxy_hls(self, params):
-        key = params.get('key') or ''
-        item = self.hls_url_cache.get(key)
-        if not item or item.get('expires', 0) < time.time():
-            return [404, 'text/plain', 'HLS 缓存已过期']
-        item['expires'] = time.time() + self._hls_ttl(item.get('kind'))
-        target_url = item.get('url') or ''
-        try:
-            headers = self._hls_headers(target_url, item.get('kind'))
-            response = self._cdn_get(target_url, headers=headers, stream=True, timeout=15)
-            retried = False
-            if item.get('kind') == 'media' and response.status_code == 403:
-                retry_headers = self._hls_headers(target_url, 'media_retry')
-                response.close()
-                retried = True
-                response = self._cdn_get(target_url, headers=retry_headers, stream=True, timeout=15)
-            content_type = response.headers.get('content-type') or ''
-            is_m3u8 = item.get('kind') in ('master', 'playlist') or 'mpegurl' in content_type.lower() or target_url.split('?')[0].endswith('.m3u8')
-            if is_m3u8:
-                text = response.text
-                rewritten = self._rewrite_m3u8(text, target_url, item.get('video_id') or '')
-                return [response.status_code, 'application/vnd.apple.mpegurl', rewritten, {'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache'}]
-            resp_headers = {'Content-Type': content_type or 'application/octet-stream', 'Cache-Control': 'no-cache'}
-            if response.headers.get('content-length'):
-                resp_headers['Content-Length'] = response.headers.get('content-length')
-            return [response.status_code, content_type or 'application/octet-stream', response.content, resp_headers]
-        except Exception as e:
-            debug_log('hls proxy error', {'key': key, 'error': repr(e)})
-            return [500, 'text/plain', f'HLS 代理失败: {str(e)}']
+    def _seconds_to_iso_duration(self, seconds):
+        seconds = float(seconds or 0)
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = seconds - hours * 3600 - minutes * 60
+        parts = []
+        if hours:
+            parts.append(f'{hours}H')
+        if minutes:
+            parts.append(f'{minutes}M')
+        parts.append(f'{secs:.3f}S')
+        return 'PT' + ''.join(parts)
 
     def destroy(self):
         try:
